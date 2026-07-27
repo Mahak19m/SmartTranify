@@ -1,0 +1,16 @@
+from sqlalchemy import Column, Integer, String
+from sqlalchemy.orm import declarative_base
+
+Base = declarative_base()
+
+class User(Base):
+    __tablename__ = "users"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String)
+    email = Column(String, unique=True)
+    password = Column(String)
+    age = Column(Integer, nullable=True)
+    weight = Column(Integer, nullable=True)
+    height = Column(Integer, nullable=True)
+    goal = Column(String, nullable=True)
