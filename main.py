@@ -3,8 +3,8 @@ from sqlalchemy.orm import Session
 from passlib.context import CryptContext
 
 from database import engine, SessionLocal
-from models import Base, User
-from schemas import UserCreate, UserLogin, UserUpdate
+from models import Base, User, Workout, Exercise
+from schemas import UserCreate, UserLogin, UserUpdate, WorkoutCreate
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from auth import create_access_token, verify_token
 
@@ -125,3 +125,62 @@ def update_me(
         "height": db_user.height,
         "goal": db_user.goal
     }
+@app.post("/workouts")
+def create_workout(
+    workout: WorkoutCreate,
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+    db: Session = Depends(get_db)
+):
+    token = credentials.credentials
+    payload = verify_token(token)
+    if payload is None:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+
+    user_id = payload.get("user_id")
+
+    new_workout = Workout(user_id=user_id)
+    db.add(new_workout)
+    db.commit()
+    db.refresh(new_workout)
+
+    for ex in workout.exercises:
+        new_exercise = Exercise(
+            workout_id=new_workout.id,
+            name=ex.name,
+            sets=ex.sets,
+            reps=ex.reps,
+            weight=ex.weight
+        )
+        db.add(new_exercise)
+
+    db.commit()
+
+    return {"message": "Workout logged successfully", "workout_id": new_workout.id}
+
+
+@app.get("/workouts")
+def get_workouts(
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+    db: Session = Depends(get_db)
+):
+    token = credentials.credentials
+    payload = verify_token(token)
+    if payload is None:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+
+    user_id = payload.get("user_id")
+    workouts = db.query(Workout).filter(Workout.user_id == user_id).all()
+
+    result = []
+    for w in workouts:
+        exercises = db.query(Exercise).filter(Exercise.workout_id == w.id).all()
+        result.append({
+            "workout_id": w.id,
+            "date": w.date,
+            "exercises": [
+                {"name": e.name, "sets": e.sets, "reps": e.reps, "weight": e.weight}
+                for e in exercises
+            ]
+        })
+
+    return result

@@ -12,3 +12,12 @@ class UserUpdate(BaseModel):
     weight: int | None = None
     height: int | None = None
     goal: str | None = None
+class ExerciseCreate(BaseModel):
+    name: str
+    sets: int
+    reps: int
+    weight: int | None = None
+
+
+class WorkoutCreate(BaseModel):
+    exercises: list[ExerciseCreate]
