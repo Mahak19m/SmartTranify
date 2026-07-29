@@ -1,0 +1,11 @@
+{
+  "name": "Apex - AI Personal Trainer & Nutrition Coach",
+  "description": "Real-time AI video trainer providing posture & form analysis, dynamic workouts, equipment safety scanning, progress tracking, and nutrition coaching.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
