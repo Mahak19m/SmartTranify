@@ -184,3 +184,68 @@ def get_workouts(
         })
 
     return result
+@app.delete("/workouts/{workout_id}")
+def delete_workout(
+    workout_id: int,
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+    db: Session = Depends(get_db)
+):
+    token = credentials.credentials
+    payload = verify_token(token)
+    if payload is None:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+
+    user_id = payload.get("user_id")
+
+    workout = db.query(Workout).filter(
+        Workout.id == workout_id,
+        Workout.user_id == user_id
+    ).first()
+
+    if not workout:
+        raise HTTPException(status_code=404, detail="Workout not found")
+
+    db.query(Exercise).filter(Exercise.workout_id == workout_id).delete()
+    db.delete(workout)
+    db.commit()
+
+    return {"message": "Workout deleted successfully"}
+
+
+@app.put("/workouts/{workout_id}")
+def update_workout(
+    workout_id: int,
+    workout_update: WorkoutCreate,
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+    db: Session = Depends(get_db)
+):
+    token = credentials.credentials
+    payload = verify_token(token)
+    if payload is None:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+
+    user_id = payload.get("user_id")
+
+    workout = db.query(Workout).filter(
+        Workout.id == workout_id,
+        Workout.user_id == user_id
+    ).first()
+
+    if not workout:
+        raise HTTPException(status_code=404, detail="Workout not found")
+
+    db.query(Exercise).filter(Exercise.workout_id == workout_id).delete()
+
+    for ex in workout_update.exercises:
+        new_exercise = Exercise(
+            workout_id=workout.id,
+            name=ex.name,
+            sets=ex.sets,
+            reps=ex.reps,
+            weight=ex.weight
+        )
+        db.add(new_exercise)
+
+    db.commit()
+
+    return {"message": "Workout updated successfully", "workout_id": workout.id}
