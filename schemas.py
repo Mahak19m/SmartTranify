@@ -27,3 +27,5 @@ class MealCreate(BaseModel):
     protein: int | None = None
     carbs: int | None = None
     fats: int | None = None
+class ProgressCreate(BaseModel):
+    weight: int

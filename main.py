@@ -3,8 +3,8 @@ from sqlalchemy.orm import Session
 from passlib.context import CryptContext
 
 from database import engine, SessionLocal
-from models import Base, User, Workout, Exercise, Meal
-from schemas import UserCreate, UserLogin, UserUpdate, WorkoutCreate, MealCreate
+from models import Base, User, Workout, Exercise, Meal, ProgressLog
+from schemas import UserCreate, UserLogin, UserUpdate, WorkoutCreate, MealCreate, ProgressCreate
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from auth import create_access_token, verify_token
 
@@ -335,3 +335,44 @@ def delete_meal(
     db.commit()
 
     return {"message": "Meal deleted successfully"}
+@app.post("/progress")
+def log_progress(
+    progress: ProgressCreate,
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+    db: Session = Depends(get_db)
+):
+    token = credentials.credentials
+    payload = verify_token(token)
+    if payload is None:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+
+    user_id = payload.get("user_id")
+
+    new_log = ProgressLog(
+        user_id=user_id,
+        weight=progress.weight
+    )
+    db.add(new_log)
+    db.commit()
+    db.refresh(new_log)
+
+    return {"message": "Progress logged successfully", "log_id": new_log.id}
+
+
+@app.get("/progress")
+def get_progress(
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+    db: Session = Depends(get_db)
+):
+    token = credentials.credentials
+    payload = verify_token(token)
+    if payload is None:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+
+    user_id = payload.get("user_id")
+    logs = db.query(ProgressLog).filter(ProgressLog.user_id == user_id).order_by(ProgressLog.date).all()
+
+    return [
+        {"log_id": l.id, "weight": l.weight, "date": l.date}
+        for l in logs
+    ]

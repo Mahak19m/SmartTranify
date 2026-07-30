@@ -50,3 +50,10 @@ class Meal(Base):
     carbs = Column(Integer, nullable=True)
     fats = Column(Integer, nullable=True)
     date = Column(DateTime, default=datetime.utcnow)
+class ProgressLog(Base):
+    __tablename__ = "progress_logs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"))
+    weight = Column(Integer)
+    date = Column(DateTime, default=datetime.utcnow)
