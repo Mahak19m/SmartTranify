@@ -39,3 +39,14 @@ class Exercise(Base):
     weight = Column(Integer, nullable=True)
 
     workout = relationship("Workout", back_populates="exercises")
+class Meal(Base):
+    __tablename__ = "meals"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"))
+    food_name = Column(String)
+    calories = Column(Integer)
+    protein = Column(Integer, nullable=True)
+    carbs = Column(Integer, nullable=True)
+    fats = Column(Integer, nullable=True)
+    date = Column(DateTime, default=datetime.utcnow)

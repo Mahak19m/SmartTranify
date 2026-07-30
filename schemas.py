@@ -21,3 +21,9 @@ class ExerciseCreate(BaseModel):
 
 class WorkoutCreate(BaseModel):
     exercises: list[ExerciseCreate]
+class MealCreate(BaseModel):
+    food_name: str
+    calories: int
+    protein: int | None = None
+    carbs: int | None = None
+    fats: int | None = None
