@@ -14,21 +14,20 @@ import {
   Award,
   Gauge,
   UserCheck,
-  Eye,
-  Sliders,
   CheckCircle2,
-  Info
+  Clock,
+  RotateCcw,
+  Plus,
+  Minus,
+  Sparkles,
+  ArrowRight
 } from 'lucide-react';
 import { AreaChart, Area, ResponsiveContainer } from 'recharts';
 import {
   Exercise,
   FormAnalysisResult,
   FormStatus,
-  CoachPersona,
-  BiomechanicalTelemetry,
-  WearableBiometrics,
-  PredictiveAnalytics,
-  JointPoint
+  CoachPersona
 } from '../types';
 import { CoachAvatar } from './CoachAvatar';
 import { PostSessionHighlightModal } from './PostSessionHighlightModal';
@@ -41,6 +40,12 @@ import {
   VisibilityCheckResult,
   Point2D
 } from '../services/poseGeometry';
+import {
+  ExerciseStateMachine,
+  MovementPhase
+} from '../services/exerciseStateMachine';
+import { api } from '../api/client';
+import { useAuth } from '../context/AuthContext';
 import type { PoseLandmarker } from '@mediapipe/tasks-vision';
 
 interface VideoConferenceStageProps {
@@ -54,6 +59,31 @@ interface VideoConferenceStageProps {
   targetReps: number;
   currentSet: number;
   totalSets: number;
+  onTargetRepsChange?: (reps: number) => void;
+  onTotalSetsChange?: (sets: number) => void;
+  onSetCompleted?: () => void;
+  onResetSession?: () => void;
+}
+
+// Sound synthesizer for clean athletic audio cues
+function playTone(freq = 660, durationMs = 140) {
+  try {
+    const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+    if (!AudioCtx) return;
+    const ctx = new AudioCtx();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(freq, ctx.currentTime);
+    gain.gain.setValueAtTime(0.12, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + durationMs / 1000);
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start();
+    osc.stop(ctx.currentTime + durationMs / 1000);
+  } catch (e) {
+    // AudioContext blocked by browser policy until gesture
+  }
 }
 
 // Preset simulation scenarios for non-webcam / demonstration mode
@@ -148,52 +178,6 @@ const SIMULATION_PRESETS = [
         rationale: 'Valgus knee collapse detected. Reinforce knee alignment with band warm-up.'
       }
     }
-  },
-  {
-    id: 'squat_lumbar',
-    name: 'Squat (Critical: Excessive Forward Lean)',
-    exerciseId: 'bodyweight_squat',
-    status: 'CRITICAL_RISK' as FormStatus,
-    score: 58,
-    spineScore: 42,
-    kneeScore: 80,
-    cue: 'Keep chest elevated! Lumbar spine flexion detected!',
-    repDetected: false,
-    hazardDetected: true,
-    hazardMessage: 'Heavy forward lean detected. High shear load on lumbar spine.',
-    joints: [
-      { name: 'Head', x: 58, y: 32, status: 'danger' as const },
-      { name: 'Shoulders', x: 55, y: 44, status: 'danger' as const },
-      { name: 'Hips', x: 44, y: 62, status: 'warning' as const },
-      { name: 'Knees', x: 46, y: 78, status: 'good' as const },
-      { name: 'Ankles', x: 45, y: 92, status: 'good' as const }
-    ],
-    telemetry: {
-      concentricVelocityMs: 0.28,
-      eccentricVelocityMs: 0.58,
-      romPercentage: 74,
-      romAchieved: false,
-      leftDominanceRatio: 48,
-      rightDominanceRatio: 52,
-      asymmetryAlert: 'Excessive lumbar moment arm. Elevate chest.',
-      fatigueIndex: 68
-    },
-    biometrics: {
-      heartRateBpm: 174,
-      hrZone: 'PEAK' as const,
-      hrvMs: 42,
-      vocalStrainExertionPct: 88,
-      recoveryScore: 72
-    },
-    predictive: {
-      injuryRiskScore: 28.4,
-      jointStrainMap: [{ joint: 'L4/L5 Lumbar Shear', strainPct: 78 }, { joint: 'Shoulder Capsule', strainPct: 52 }],
-      progressiveOverload: {
-        recommendedWeightChangeKg: -2.5,
-        recommendedRepsDelta: -2,
-        rationale: 'Spine stability compromised. Reduce intensity for remainder of set.'
-      }
-    }
   }
 ];
 
@@ -219,13 +203,22 @@ export const VideoConferenceStage: React.FC<VideoConferenceStageProps> = ({
   currentRep,
   targetReps,
   currentSet,
-  totalSets
+  totalSets,
+  onTargetRepsChange,
+  onTotalSetsChange,
+  onSetCompleted,
+  onResetSession
 }) => {
+  const { isAuthenticated } = useAuth();
+
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const animFrameIdRef = useRef<number | null>(null);
   const landmarkerRef = useRef<PoseLandmarker | null>(null);
   const lastStateUpdateTimeRef = useRef<number>(0);
+
+  // Finite State Machine reference
+  const fsmRef = useRef<ExerciseStateMachine>(new ExerciseStateMachine(currentExercise.id, currentRep));
 
   // Webcam & Model State
   const [useWebcam, setUseWebcam] = useState(false);
@@ -235,14 +228,43 @@ export const VideoConferenceStage: React.FC<VideoConferenceStageProps> = ({
   const [visibilityResult, setVisibilityResult] = useState<VisibilityCheckResult | null>(null);
   const [liveAngles, setLiveAngles] = useState<Record<string, number>>({});
 
+  // FSM phase & incomplete banner
+  const [movementPhase, setMovementPhase] = useState<MovementPhase>('START');
+  const [incompleteRepWarning, setIncompleteRepWarning] = useState<string | null>(null);
+
+  // Rest Timer State
+  const [isRestTimerActive, setIsRestTimerActive] = useState<boolean>(false);
+  const [restSecondsRemaining, setRestSecondsRemaining] = useState<number>(45);
+
+  // Workout Session Duration & Stats
+  const [isWorkoutActive, setIsWorkoutActive] = useState(false);
+  const [sessionSeconds, setSessionSeconds] = useState<number>(0);
+  const [sessionHistoryScores, setSessionHistoryScores] = useState<number[]>([92]);
+
   // Simulation fallback state
   const [selectedSimulation, setSelectedSimulation] = useState(SIMULATION_PRESETS[0]);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
-  const [isWorkoutActive, setIsWorkoutActive] = useState(false);
-  const [ghostOverlayEnabled, setGhostOverlayEnabled] = useState(true);
   const [activePersona, setActivePersona] = useState<CoachPersona>('drill_sergeant');
   const [hapticMessage, setHapticMessage] = useState<string | null>(null);
   const [isHighlightModalOpen, setIsHighlightModalOpen] = useState(false);
+
+  // Dynamic target reps & sets
+  const [localTargetReps, setLocalTargetReps] = useState<number>(targetReps);
+  const [localTotalSets, setLocalTotalSets] = useState<number>(totalSets);
+
+  useEffect(() => {
+    setLocalTargetReps(targetReps);
+  }, [targetReps]);
+
+  useEffect(() => {
+    setLocalTotalSets(totalSets);
+  }, [totalSets]);
+
+  // Sync state machine when exercise or currentRep changes
+  useEffect(() => {
+    fsmRef.current.setExercise(currentExercise.id);
+    fsmRef.current.setRepCount(currentRep);
+  }, [currentExercise.id, currentRep]);
 
   // Analysis result state
   const [analysisResult, setAnalysisResult] = useState<FormAnalysisResult>({
@@ -251,7 +273,7 @@ export const VideoConferenceStage: React.FC<VideoConferenceStageProps> = ({
     score: SIMULATION_PRESETS[0].score,
     joints: SIMULATION_PRESETS[0].joints,
     cue: SIMULATION_PRESETS[0].cue,
-    detailedFeedback: 'Biomechanical trajectory optimal. Ghost-Racer PR trajectory aligned.',
+    detailedFeedback: 'Biomechanical trajectory optimal.',
     repDetected: true,
     hazardDetected: false,
     spineNeutralityScore: SIMULATION_PRESETS[0].spineScore,
@@ -261,40 +283,90 @@ export const VideoConferenceStage: React.FC<VideoConferenceStageProps> = ({
     predictive: SIMULATION_PRESETS[0].predictive
   });
 
-  const [dynamicTargetReps, setDynamicTargetReps] = useState(targetReps);
-  useEffect(() => {
-    setDynamicTargetReps(targetReps);
-  }, [targetReps]);
-
-  // Tempo rhythm state (for timer guidance)
-  const [tempoPhase, setTempoPhase] = useState<'ECCENTRIC' | 'HOLD' | 'CONCENTRIC' | 'PAUSE'>('ECCENTRIC');
-  const [tempoProgress, setTempoProgress] = useState(0);
-
+  // Elapsed Session Timer
   useEffect(() => {
     if (!isWorkoutActive) return;
-
     const interval = setInterval(() => {
-      setTempoProgress((prev) => {
-        const next = prev + 25;
-        if (next >= 100) {
-          setTempoPhase((current) => {
-            switch (current) {
-              case 'ECCENTRIC': return 'HOLD';
-              case 'HOLD': return 'CONCENTRIC';
-              case 'CONCENTRIC': return 'PAUSE';
-              case 'PAUSE': return 'ECCENTRIC';
-            }
-          });
-          return 0;
-        }
-        return next;
-      });
-    }, 500);
-
+      setSessionSeconds((s) => s + 1);
+    }, 1000);
     return () => clearInterval(interval);
   }, [isWorkoutActive]);
 
-  // Initialize MediaPipe PoseLandmarker once
+  // Rest Timer Countdown Loop
+  useEffect(() => {
+    if (!isRestTimerActive) return;
+
+    const timer = setInterval(() => {
+      setRestSecondsRemaining((prev) => {
+        if (prev <= 1) {
+          clearInterval(timer);
+          setIsRestTimerActive(false);
+          playTone(880, 250);
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+
+    return () => clearInterval(timer);
+  }, [isRestTimerActive]);
+
+  // Format MM:SS
+  const formatTime = (secs: number) => {
+    const m = Math.floor(secs / 60);
+    const s = secs % 60;
+    return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+  };
+
+  // Launch Rest Timer
+  const triggerRestInterval = (restSec: number = 45) => {
+    setIsRestTimerActive(true);
+    setRestSecondsRemaining(restSec);
+    playTone(520, 200);
+  };
+
+  // Skip Rest Timer
+  const skipRest = () => {
+    setIsRestTimerActive(false);
+    setRestSecondsRemaining(0);
+    playTone(700, 150);
+  };
+
+  // Save Completed Workout Session to backend API
+  const persistCompletedWorkoutSession = async () => {
+    const avgScore = Math.round(
+      sessionHistoryScores.reduce((a, b) => a + b, 0) / (sessionHistoryScores.length || 1)
+    );
+    const totalVolume = localTotalSets * localTargetReps * (currentExercise.defaultReps || 10);
+
+    if (isAuthenticated) {
+      try {
+        await api.recordWorkoutSession({
+          title: `${currentExercise.name} Session`,
+          duration_seconds: sessionSeconds,
+          total_volume_kg: totalVolume,
+          avg_form_score: avgScore,
+          rpe: 8,
+          notes: `Completed ${localTotalSets} sets of ${currentExercise.name}. Form accuracy: ${avgScore}%.`,
+          exercise_records: [
+            {
+              name: currentExercise.name,
+              sets_completed: localTotalSets,
+              reps_completed: localTargetReps,
+              target_reps: localTargetReps,
+              weight_kg: 0.0,
+              avg_form_score: avgScore,
+              notes: 'Real-time MediaPipe Pose verification.'
+            }
+          ]
+        });
+      } catch (err) {
+        console.warn('Workout session database recording note:', err);
+      }
+    }
+  };
+
+  // Pre-load MediaPipe PoseLandmarker
   useEffect(() => {
     let isMounted = true;
     (async () => {
@@ -307,7 +379,6 @@ export const VideoConferenceStage: React.FC<VideoConferenceStageProps> = ({
         }
       } catch (err: any) {
         if (isMounted) {
-          console.warn('MediaPipe pre-load notice:', err);
           setIsModelLoading(false);
         }
       }
@@ -325,7 +396,6 @@ export const VideoConferenceStage: React.FC<VideoConferenceStageProps> = ({
       setWebcamError(null);
       setIsModelLoading(true);
 
-      // Ensure landmarker is initialized
       if (!landmarkerRef.current) {
         landmarkerRef.current = await getPoseLandmarker();
       }
@@ -336,7 +406,7 @@ export const VideoConferenceStage: React.FC<VideoConferenceStageProps> = ({
           height: { ideal: 720 },
           facingMode: 'user'
         },
-        audio: false // No audio recording without explicit consent
+        audio: false // Video only processed in-browser
       });
 
       if (videoRef.current) {
@@ -350,7 +420,7 @@ export const VideoConferenceStage: React.FC<VideoConferenceStageProps> = ({
       setIsModelLoading(false);
       setUseWebcam(false);
       if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
-        setWebcamError('Webcam permission denied. Please allow camera access in browser settings to enable AI pose detection.');
+        setWebcamError('Webcam permission denied. Please allow camera access to enable real-time pose estimation.');
       } else if (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError') {
         setWebcamError('No webcam found on this device. Operating in Bento Simulation Mode.');
       } else {
@@ -375,7 +445,6 @@ export const VideoConferenceStage: React.FC<VideoConferenceStageProps> = ({
     setVisibilityResult(null);
     setDetectedLandmarksCount(0);
 
-    // Clear canvas
     const canvas = canvasRef.current;
     if (canvas) {
       const ctx = canvas.getContext('2d');
@@ -383,7 +452,7 @@ export const VideoConferenceStage: React.FC<VideoConferenceStageProps> = ({
     }
   };
 
-  // Real-Time Computer Vision Inference Loop (MediaPipe 33 Keypoints)
+  // Real-Time Computer Vision & Automatic Repetition Counting Inference Loop
   useEffect(() => {
     if (!useWebcam) {
       if (animFrameIdRef.current) {
@@ -407,7 +476,8 @@ export const VideoConferenceStage: React.FC<VideoConferenceStageProps> = ({
 
       if (video.currentTime !== lastVideoTime && video.readyState >= 2) {
         lastVideoTime = video.currentTime;
-        const result = detectPoseInVideo(landmarker, video, performance.now());
+        const now = performance.now();
+        const result = detectPoseInVideo(landmarker, video, now);
 
         const ctx = canvas.getContext('2d');
         if (ctx) {
@@ -417,13 +487,67 @@ export const VideoConferenceStage: React.FC<VideoConferenceStageProps> = ({
             const rawLandmarks: Point2D[] = result.landmarks[0];
             setDetectedLandmarksCount(rawLandmarks.length);
 
-            // 1. Check Body Visibility & Camera Angle Suitability
+            // 1. Check Body Visibility & Camera Distance
             const visCheck = checkBodyVisibility(rawLandmarks);
 
             // 2. Evaluate Exercise-Specific Biomechanics
             const evalResult = evaluateExercisePosture(currentExercise.id, rawLandmarks);
 
-            // 3. Render 33-Keypoint Skeleton Overlay onto Canvas
+            // 3. Extract primary kinematic angle for State Machine
+            let primaryAngle = 180;
+            let secondaryAngle = undefined;
+
+            if (currentExercise.id.includes('squat')) {
+              primaryAngle = evalResult.jointAngles.knee ?? 180;
+            } else if (currentExercise.id.includes('pushup') || currentExercise.id.includes('push_up') || currentExercise.id.includes('plank')) {
+              primaryAngle = evalResult.jointAngles.elbow ?? 180;
+            } else if (currentExercise.id.includes('lunge')) {
+              primaryAngle = evalResult.jointAngles.frontKnee ?? 180;
+            } else if (currentExercise.id.includes('curl') || currentExercise.id.includes('row')) {
+              primaryAngle = evalResult.jointAngles.elbow ?? 180;
+            } else if (currentExercise.id.includes('jack')) {
+              primaryAngle = evalResult.jointAngles.armElevation ?? 0;
+              secondaryAngle = evalResult.jointAngles.legRatio;
+            }
+
+            // 4. Update Exercise Finite State Machine for Automatic Repetition Counting
+            if (isWorkoutActive && !isRestTimerActive) {
+              const fsmResult = fsmRef.current.update(
+                primaryAngle,
+                visCheck.isFullyVisible,
+                now,
+                secondaryAngle
+              );
+
+              // Repetition completed!
+              if (fsmResult.repIncremented) {
+                playTone(660, 140); // Play audible rep completion chime
+                onRepCompleted();
+                setSessionHistoryScores((prev) => [...prev, evalResult.score]);
+
+                // Check set completion threshold
+                if (currentRep + 1 >= localTargetReps) {
+                  if (currentSet < localTotalSets) {
+                    // Set completed: trigger rest timer and set increment
+                    playTone(880, 250);
+                    triggerRestInterval(currentExercise.defaultRestSec || 45);
+                    if (onSetCompleted) onSetCompleted();
+                  } else {
+                    // Entire workout completed!
+                    playTone(990, 400);
+                    persistCompletedWorkoutSession();
+                    setIsHighlightModalOpen(true);
+                  }
+                }
+              }
+
+              if (fsmResult.incompleteReason) {
+                setIncompleteRepWarning(fsmResult.incompleteReason);
+                setTimeout(() => setIncompleteRepWarning(null), 3000);
+              }
+            }
+
+            // 5. Render 33-Keypoint Skeleton Overlay & Angle Badges onto Canvas
             drawMediaPipeSkeleton(
               ctx,
               canvas.width,
@@ -432,15 +556,16 @@ export const VideoConferenceStage: React.FC<VideoConferenceStageProps> = ({
               evalResult.status,
               evalResult.problematicJoints,
               evalResult.jointAngles,
-              visCheck
+              visCheck,
+              fsmRef.current.getPhase()
             );
 
-            // Throttle React state updates (max 6-8 updates/sec) to prevent unnecessary re-render overhead
-            const now = performance.now();
+            // 6. Throttle React State Updates (max 6-8 updates/sec)
             if (now - lastStateUpdateTimeRef.current > 140) {
               lastStateUpdateTimeRef.current = now;
               setVisibilityResult(visCheck);
               setLiveAngles(evalResult.jointAngles);
+              setMovementPhase(fsmRef.current.getPhase());
 
               setAnalysisResult((prev) => ({
                 ...prev,
@@ -450,12 +575,11 @@ export const VideoConferenceStage: React.FC<VideoConferenceStageProps> = ({
                 detailedFeedback: !visCheck.isFullyVisible ? visCheck.advice : evalResult.detailedFeedback,
                 spineNeutralityScore: evalResult.spineScore,
                 kneeAlignmentScore: evalResult.kneeScore,
-                joints: rawLandmarks.slice(0, 5).map((l, idx) => ({
-                  name: ['Nose', 'L.Eye', 'R.Eye', 'L.Ear', 'R.Ear'][idx] || 'Joint',
-                  x: l.x * 100,
-                  y: l.y * 100,
-                  status: evalResult.status === 'PERFECT' ? 'good' : 'warning'
-                }))
+                telemetry: {
+                  ...prev.telemetry!,
+                  romPercentage: fsmRef.current.update(primaryAngle, visCheck.isFullyVisible, now).romPercentage,
+                  romAchieved: fsmRef.current.update(primaryAngle, visCheck.isFullyVisible, now).romPercentage >= 90
+                }
               }));
             }
           } else {
@@ -485,9 +609,9 @@ export const VideoConferenceStage: React.FC<VideoConferenceStageProps> = ({
         animFrameIdRef.current = null;
       }
     };
-  }, [useWebcam, currentExercise.id]);
+  }, [useWebcam, currentExercise.id, isWorkoutActive, isRestTimerActive, currentRep, currentSet, localTargetReps, localTotalSets]);
 
-  // Draw 33-point skeleton connections, joints, and live joint angle HUD badges on canvas
+  // Draw 33-point skeleton connections, joints, angles, and active phase banner on canvas
   const drawMediaPipeSkeleton = (
     ctx: CanvasRenderingContext2D,
     width: number,
@@ -496,9 +620,10 @@ export const VideoConferenceStage: React.FC<VideoConferenceStageProps> = ({
     formStatus: FormStatus,
     problematicJoints: number[],
     jointAngles: Record<string, number>,
-    visCheck: VisibilityCheckResult
+    visCheck: VisibilityCheckResult,
+    phase: MovementPhase
   ) => {
-    // 1. Draw MediaPipe Bone Connections
+    // 1. Draw Skeleton Bones
     const baseColor =
       formStatus === 'PERFECT' ? '#a3e635' : formStatus === 'CRITICAL_RISK' ? '#f43f5e' : '#f59e0b';
 
@@ -522,7 +647,7 @@ export const VideoConferenceStage: React.FC<VideoConferenceStageProps> = ({
       }
     }
 
-    // 2. Draw 33 Detected Landmark Dots
+    // 2. Draw 33 Landmark Points
     landmarks.forEach((p, idx) => {
       if ((p.visibility ?? 1) >= 0.35) {
         const px = p.x * width;
@@ -539,7 +664,7 @@ export const VideoConferenceStage: React.FC<VideoConferenceStageProps> = ({
       }
     });
 
-    // 3. Draw Real-Time Joint Angle Badges over Key Pivot Joints
+    // 3. Draw Joint Angle Badges
     ctx.font = 'bold 11px monospace';
     ctx.textAlign = 'center';
 
@@ -579,17 +704,32 @@ export const VideoConferenceStage: React.FC<VideoConferenceStageProps> = ({
       drawAngleTag(LANDMARK.LEFT_ELBOW, 'Elbow', jointAngles.elbow);
     }
 
-    // 4. Directional Guidance Tag over Frame if user is cut off
+    // 4. Movement Phase HUD Pill
+    ctx.font = 'bold 10px monospace';
+    const phaseText = `PHASE: ${phase}`;
+    ctx.fillStyle = 'rgba(9, 9, 11, 0.85)';
+    ctx.beginPath();
+    ctx.roundRect(14, 14, 110, 22, 5);
+    ctx.fill();
+    ctx.strokeStyle = phase === 'BOTTOM' ? '#a3e635' : phase === 'DESCENDING' ? '#f59e0b' : '#38bdf8';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+    ctx.fillStyle = phase === 'BOTTOM' ? '#a3e635' : '#f4f4f5';
+    ctx.textAlign = 'left';
+    ctx.fillText(phaseText, 22, 28);
+
+    // 5. Directional Guidance Tag over Frame if user is cut off
     if (!visCheck.isFullyVisible) {
       ctx.fillStyle = 'rgba(244, 63, 94, 0.9)';
       const bannerWidth = Math.min(width - 32, 420);
       ctx.beginPath();
-      ctx.roundRect(width / 2 - bannerWidth / 2, 16, bannerWidth, 26, 6);
+      ctx.roundRect(width / 2 - bannerWidth / 2, height - 45, bannerWidth, 26, 6);
       ctx.fill();
 
       ctx.fillStyle = '#ffffff';
       ctx.font = 'bold 11px monospace';
-      ctx.fillText(visCheck.advice.toUpperCase(), width / 2, 33);
+      ctx.textAlign = 'center';
+      ctx.fillText(visCheck.advice.toUpperCase(), width / 2, height - 28);
     }
   };
 
@@ -617,7 +757,7 @@ export const VideoConferenceStage: React.FC<VideoConferenceStageProps> = ({
           exerciseName: currentExercise.name,
           imageBase64: imageBase64 || undefined,
           currentReps: currentRep,
-          targetReps: dynamicTargetReps,
+          targetReps: localTargetReps,
           setNumber: currentSet
         })
       });
@@ -641,7 +781,7 @@ export const VideoConferenceStage: React.FC<VideoConferenceStageProps> = ({
     } finally {
       setIsAnalyzing(false);
     }
-  }, [useWebcam, currentExercise.name, currentRep, dynamicTargetReps, currentSet]);
+  }, [useWebcam, currentExercise.name, currentRep, localTargetReps, currentSet]);
 
   const handleSelectSimulation = (sim: typeof SIMULATION_PRESETS[0]) => {
     setSelectedSimulation(sim);
@@ -701,14 +841,20 @@ export const VideoConferenceStage: React.FC<VideoConferenceStageProps> = ({
                 ))}
               </select>
             </div>
-            <p className="text-xs text-zinc-400 mt-1 font-medium">
-              Target: <span className="text-zinc-200">{currentExercise.targetMuscles.join(', ')}</span>
-            </p>
+            <div className="flex items-center space-x-3 text-xs text-zinc-400 mt-1 font-mono">
+              <span>Target: <strong className="text-zinc-200">{currentExercise.targetMuscles.join(', ')}</strong></span>
+              <span>•</span>
+              <span className="flex items-center space-x-1">
+                <Clock className="w-3.5 h-3.5 text-lime-400" />
+                <span>Elapsed: {formatTime(sessionSeconds)}</span>
+              </span>
+            </div>
           </div>
         </div>
 
         {/* Action Controls */}
         <div className="flex items-center space-x-2 flex-wrap gap-y-2">
+          {/* Start / Pause Workout Timer */}
           <button
             onClick={() => setIsWorkoutActive(!isWorkoutActive)}
             className={`px-4 py-2.5 rounded-xl text-xs font-mono font-black flex items-center space-x-1.5 shadow-lg transition-all ${
@@ -718,9 +864,10 @@ export const VideoConferenceStage: React.FC<VideoConferenceStageProps> = ({
             }`}
           >
             {isWorkoutActive ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
-            <span>{isWorkoutActive ? 'Pause Training' : 'Start Active Session'}</span>
+            <span>{isWorkoutActive ? 'Pause Session' : 'Start Active Session'}</span>
           </button>
 
+          {/* AI Snapshot Form Check */}
           <button
             onClick={performAIFormAnalysis}
             disabled={isAnalyzing}
@@ -730,6 +877,7 @@ export const VideoConferenceStage: React.FC<VideoConferenceStageProps> = ({
             <span>AI Form Check</span>
           </button>
 
+          {/* Highlights Modal Trigger */}
           <button
             onClick={() => setIsHighlightModalOpen(true)}
             className="px-3 py-2.5 rounded-xl bg-sky-400/10 text-sky-300 hover:bg-sky-400/20 border border-sky-400/30 text-xs font-mono font-bold flex items-center space-x-1"
@@ -738,13 +886,14 @@ export const VideoConferenceStage: React.FC<VideoConferenceStageProps> = ({
             <span>Highlights & Cooldown</span>
           </button>
 
+          {/* Webcam Toggle */}
           {useWebcam ? (
             <button
               onClick={stopWebcam}
               className="px-3 py-2.5 rounded-xl bg-rose-500/10 text-rose-400 hover:bg-rose-500/20 border border-rose-500/30 text-xs font-mono font-bold flex items-center space-x-1"
             >
               <CameraOff className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">Stop Webcam</span>
+              <span className="hidden sm:inline">Stop Cam</span>
             </button>
           ) : (
             <button
@@ -753,7 +902,7 @@ export const VideoConferenceStage: React.FC<VideoConferenceStageProps> = ({
               className="px-3.5 py-2.5 rounded-xl bg-lime-400/10 text-lime-400 hover:bg-lime-400/20 border border-lime-400/30 text-xs font-mono font-bold flex items-center space-x-1.5 transition-all shadow-md shadow-lime-400/10"
             >
               <Camera className="w-3.5 h-3.5" />
-              <span>{isModelLoading ? 'Loading AI Model...' : 'Start Live Webcam'}</span>
+              <span>{isModelLoading ? 'Loading AI Model...' : 'Start Live Cam'}</span>
             </button>
           )}
         </div>
@@ -768,6 +917,43 @@ export const VideoConferenceStage: React.FC<VideoConferenceStageProps> = ({
           <button onClick={() => setWebcamError(null)} className="text-rose-400 font-bold underline ml-2">
             Dismiss
           </button>
+        </div>
+      )}
+
+      {/* Incomplete Repetition Alert Banner */}
+      {incompleteRepWarning && (
+        <div className="p-3 bg-amber-500/15 border border-amber-500/40 rounded-2xl text-xs text-amber-300 flex items-center space-x-2 font-mono animate-in slide-in-from-top duration-200">
+          <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
+          <span><strong>INCOMPLETE REP DETECTED:</strong> {incompleteRepWarning}</span>
+        </div>
+      )}
+
+      {/* Rest Timer Active Floating Card */}
+      {isRestTimerActive && (
+        <div className="p-4 bg-gradient-to-r from-emerald-950 via-zinc-900 to-emerald-950 border-2 border-emerald-500 rounded-3xl text-zinc-100 flex flex-col sm:flex-row items-center justify-between gap-3 shadow-2xl animate-in fade-in font-mono">
+          <div className="flex items-center space-x-3">
+            <div className="w-12 h-12 rounded-2xl bg-emerald-500/20 border border-emerald-400/30 flex items-center justify-center font-black text-xl text-emerald-400">
+              {restSecondsRemaining}s
+            </div>
+            <div>
+              <span className="text-[10px] text-emerald-400 font-bold uppercase tracking-wider block">
+                REST INTERVAL IN PROGRESS
+              </span>
+              <h4 className="text-sm font-black text-zinc-100">
+                Catch your breath before Set {currentSet + 1} of {localTotalSets}
+              </h4>
+            </div>
+          </div>
+
+          <div className="flex items-center space-x-2">
+            <button
+              onClick={skipRest}
+              className="px-4 py-2 bg-emerald-500 hover:bg-emerald-400 text-zinc-950 font-black text-xs rounded-xl shadow-lg flex items-center space-x-1.5 transition-all"
+            >
+              <span>Skip Rest & Begin Set {currentSet + 1}</span>
+              <ArrowRight className="w-3.5 h-3.5" />
+            </button>
+          </div>
         </div>
       )}
 
@@ -793,6 +979,10 @@ export const VideoConferenceStage: React.FC<VideoConferenceStageProps> = ({
                   {detectedLandmarksCount}/33 JOINTS
                 </span>
               )}
+
+              <span className="text-xs font-mono font-bold text-lime-400 px-2 py-0.5 rounded bg-lime-400/10 border border-lime-400/30">
+                SET {currentSet} OF {localTotalSets}
+              </span>
             </div>
 
             {/* Simulation Preset Selector (Visible when webcam is off) */}
@@ -835,7 +1025,7 @@ export const VideoConferenceStage: React.FC<VideoConferenceStageProps> = ({
                   </div>
                 </div>
                 <p className="text-xs text-zinc-400 max-w-sm font-mono mb-4">
-                  Simulating biomechanical posture. Click <strong>Start Live Webcam</strong> for actual real-time 33-point MediaPipe pose estimation.
+                  Operating in Simulation Mode. Turn camera on for real-time webcam pose detection and automatic rep counting.
                 </p>
                 <button
                   onClick={startWebcam}
@@ -847,26 +1037,13 @@ export const VideoConferenceStage: React.FC<VideoConferenceStageProps> = ({
               </div>
             )}
 
-            {/* Canvas Overlay for Joint Skeleton */}
+            {/* Canvas Overlay for Joint Skeleton & Real-Time Angle Badges */}
             <canvas
               ref={canvasRef}
               width={640}
               height={440}
               className="absolute inset-0 w-full h-full object-cover pointer-events-none z-10"
             />
-
-            {/* Visibility Guidance Bar on Live Video */}
-            {useWebcam && visibilityResult && !visibilityResult.isFullyVisible && (
-              <div className="absolute bottom-20 left-4 right-4 z-20 bg-rose-950/90 border border-rose-500/80 rounded-2xl p-3 text-rose-200 text-xs flex items-center space-x-2 shadow-2xl backdrop-blur">
-                <AlertTriangle className="w-5 h-5 text-rose-400 shrink-0" />
-                <div>
-                  <strong className="block text-rose-100 uppercase text-[10px] tracking-wider font-mono">
-                    CAMERA GUIDANCE ({visibilityResult.status.replace(/_/g, ' ')}):
-                  </strong>
-                  <span>{visibilityResult.advice}</span>
-                </div>
-              </div>
-            )}
 
             {/* Spatial Hazard Alert Banner */}
             {analysisResult.hazardDetected && (
@@ -898,47 +1075,105 @@ export const VideoConferenceStage: React.FC<VideoConferenceStageProps> = ({
               repCount={currentRep}
               exerciseName={currentExercise.name}
               voiceCuesEnabled={voiceCuesEnabled}
-              tempoPhase={tempoPhase}
+              tempoPhase={movementPhase === 'START' ? 'HOLD' : movementPhase === 'DESCENDING' ? 'ECCENTRIC' : movementPhase === 'BOTTOM' ? 'HOLD' : 'CONCENTRIC'}
               activePersona={activePersona}
               onPersonaChange={setActivePersona}
             />
           </div>
         </div>
 
-        {/* BENTO TILE 2: Live Angles & Repetition Benchmark (4 Cols) */}
+        {/* BENTO TILE 2: Automatic Rep Counter & Set Management (4 Cols) */}
         <div className="lg:col-span-4 bg-zinc-900 border border-zinc-800 rounded-3xl p-5 text-zinc-100 shadow-2xl flex flex-col justify-between">
           <div>
             <div className="flex items-center justify-between mb-2">
               <span className="text-xs uppercase font-mono font-bold text-zinc-400 tracking-wider">
-                REPETITION BENCHMARK
+                AUTOMATIC REP COUNTER
               </span>
               <span className="text-xs font-mono font-bold text-lime-400 px-2.5 py-0.5 rounded-md bg-lime-400/10 border border-lime-400/20">
-                TARGET: {dynamicTargetReps} REPS
+                SET {currentSet}/{localTotalSets}
               </span>
             </div>
 
-            {/* Rep Counter Number */}
+            {/* Big Rep Counter Number & Manual Override */}
             <div className="flex items-baseline justify-between my-3">
               <div className="flex items-baseline space-x-1">
                 <span className="text-6xl font-black font-mono tracking-tight text-lime-400">
                   {currentRep}
                 </span>
-                <span className="text-xl text-zinc-500 font-mono">/ {dynamicTargetReps}</span>
+                <span className="text-xl text-zinc-500 font-mono">/ {localTargetReps}</span>
               </div>
 
               <button
                 onClick={onRepCompleted}
                 className="px-3 py-1.5 bg-lime-400/10 hover:bg-lime-400/20 text-lime-300 font-mono text-xs rounded-xl border border-lime-400/30 font-bold transition-all"
+                title="Manually increment rep if required"
               >
                 +1 Manual Rep
               </button>
             </div>
 
+            {/* Target Reps and Sets Configurator */}
+            <div className="grid grid-cols-2 gap-2 p-2.5 bg-zinc-950 rounded-2xl border border-zinc-800 font-mono text-xs my-2">
+              <div>
+                <span className="text-[10px] text-zinc-500 block uppercase font-bold">Target Reps</span>
+                <div className="flex items-center space-x-2 mt-1">
+                  <button
+                    onClick={() => {
+                      const next = Math.max(1, localTargetReps - 1);
+                      setLocalTargetReps(next);
+                      if (onTargetRepsChange) onTargetRepsChange(next);
+                    }}
+                    className="p-1 bg-zinc-900 hover:bg-zinc-800 rounded-lg text-zinc-300 border border-zinc-800"
+                  >
+                    <Minus className="w-3 h-3" />
+                  </button>
+                  <span className="font-bold text-lime-400 text-sm">{localTargetReps}</span>
+                  <button
+                    onClick={() => {
+                      const next = localTargetReps + 1;
+                      setLocalTargetReps(next);
+                      if (onTargetRepsChange) onTargetRepsChange(next);
+                    }}
+                    className="p-1 bg-zinc-900 hover:bg-zinc-800 rounded-lg text-zinc-300 border border-zinc-800"
+                  >
+                    <Plus className="w-3 h-3" />
+                  </button>
+                </div>
+              </div>
+
+              <div>
+                <span className="text-[10px] text-zinc-500 block uppercase font-bold">Total Sets</span>
+                <div className="flex items-center space-x-2 mt-1">
+                  <button
+                    onClick={() => {
+                      const next = Math.max(1, localTotalSets - 1);
+                      setLocalTotalSets(next);
+                      if (onTotalSetsChange) onTotalSetsChange(next);
+                    }}
+                    className="p-1 bg-zinc-900 hover:bg-zinc-800 rounded-lg text-zinc-300 border border-zinc-800"
+                  >
+                    <Minus className="w-3 h-3" />
+                  </button>
+                  <span className="font-bold text-sky-400 text-sm">{localTotalSets}</span>
+                  <button
+                    onClick={() => {
+                      const next = localTotalSets + 1;
+                      setLocalTotalSets(next);
+                      if (onTotalSetsChange) onTotalSetsChange(next);
+                    }}
+                    className="p-1 bg-zinc-900 hover:bg-zinc-800 rounded-lg text-zinc-300 border border-zinc-800"
+                  >
+                    <Plus className="w-3 h-3" />
+                  </button>
+                </div>
+              </div>
+            </div>
+
             {/* Live Detected Joint Angles Box */}
-            <div className="p-3 bg-zinc-950 rounded-2xl border border-zinc-800 space-y-2 my-3">
+            <div className="p-3 bg-zinc-950 rounded-2xl border border-zinc-800 space-y-2 my-2">
               <span className="text-[10px] font-mono uppercase font-bold text-zinc-400 tracking-wider flex items-center justify-between">
                 <span>Real-Time Joint Angles</span>
-                <span className="text-lime-400">{useWebcam ? '● Live CV' : '● Simulation'}</span>
+                <span className="text-lime-400">{useWebcam ? '● Live MediaPipe' : '● Simulation'}</span>
               </span>
 
               <div className="grid grid-cols-2 gap-2 text-xs font-mono">
@@ -970,7 +1205,7 @@ export const VideoConferenceStage: React.FC<VideoConferenceStageProps> = ({
             </div>
 
             {/* Range of Motion (ROM) Meter Bar */}
-            <div className="p-3 bg-zinc-950 rounded-2xl border border-zinc-800 space-y-1.5 my-3">
+            <div className="p-3 bg-zinc-950 rounded-2xl border border-zinc-800 space-y-1.5 my-2">
               <div className="flex justify-between items-center text-xs font-mono">
                 <span className="text-zinc-400">Range of Motion (ROM):</span>
                 <span className={`font-bold ${telemetry.romAchieved ? 'text-lime-400' : 'text-amber-400'}`}>
@@ -986,23 +1221,33 @@ export const VideoConferenceStage: React.FC<VideoConferenceStageProps> = ({
                 />
               </div>
               <p className="text-[10px] text-zinc-500 font-mono">
-                *Rep counter state machine will activate in Phase 4.
+                *FSM validates complete depth before ascending to count reps.
               </p>
             </div>
           </div>
 
-          {/* Tempo Rhythm Cadence */}
-          <div className="pt-3 border-t border-zinc-800 space-y-1.5">
-            <div className="flex items-center justify-between text-xs font-mono">
-              <span className="text-zinc-400">TEMPO CADENCE:</span>
-              <span className="text-lime-400 font-bold">{tempoPhase}</span>
-            </div>
-            <div className="w-full bg-zinc-950 h-2 rounded-full overflow-hidden border border-zinc-800">
-              <div
-                className="bg-gradient-to-r from-amber-400 to-lime-400 h-full transition-all duration-300"
-                style={{ width: `${tempoProgress}%` }}
-              />
-            </div>
+          {/* Reset / End Workout Button */}
+          <div className="pt-2 border-t border-zinc-800 flex items-center justify-between text-xs font-mono">
+            <button
+              onClick={() => {
+                if (onResetSession) onResetSession();
+                fsmRef.current.reset();
+              }}
+              className="text-zinc-400 hover:text-zinc-200 flex items-center space-x-1"
+            >
+              <RotateCcw className="w-3.5 h-3.5" />
+              <span>Reset Counters</span>
+            </button>
+
+            <button
+              onClick={() => {
+                persistCompletedWorkoutSession();
+                setIsHighlightModalOpen(true);
+              }}
+              className="text-lime-400 hover:text-lime-300 font-bold"
+            >
+              End Workout & Save
+            </button>
           </div>
         </div>
 
@@ -1197,7 +1442,7 @@ export const VideoConferenceStage: React.FC<VideoConferenceStageProps> = ({
         exerciseName={currentExercise.name}
         totalReps={currentRep}
         avgFormScore={analysisResult.score}
-        totalVolumeKg={telemetry.romPercentage * 12}
+        totalVolumeKg={localTotalSets * localTargetReps * 12}
       />
     </div>
   );

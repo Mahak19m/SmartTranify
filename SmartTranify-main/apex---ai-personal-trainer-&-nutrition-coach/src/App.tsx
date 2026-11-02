@@ -129,6 +129,16 @@ function AppContent() {
             targetReps={targetReps}
             currentSet={currentSet}
             totalSets={totalSets}
+            onTargetRepsChange={(val) => setTargetReps(val)}
+            onTotalSetsChange={(val) => setTotalSets(val)}
+            onSetCompleted={() => {
+              setCurrentSet((s) => s + 1);
+              setCurrentRep(0);
+            }}
+            onResetSession={() => {
+              setCurrentSet(1);
+              setCurrentRep(0);
+            }}
           />
         )}
 
