@@ -274,22 +274,40 @@ def record_workout_session(
     # Update User Progress Stats
     prog = db.query(UserProgress).filter(UserProgress.user_id == current_user.id).first()
     if not prog:
-        prog = UserProgress(user_id=current_user.id)
+        prog = UserProgress(
+            user_id=current_user.id,
+            streak_days=1,
+            total_workouts=0,
+            total_minutes=0,
+            total_calories_burned=0
+        )
         db.add(prog)
 
+    now = datetime.now(timezone.utc)
+    if prog.last_workout_date:
+        days_diff = (now.date() - prog.last_workout_date.date()).days
+        if days_diff == 1:
+            prog.streak_days += 1
+        elif days_diff > 1:
+            prog.streak_days = 1
+    else:
+        prog.streak_days = 1
+
     prog.total_workouts += 1
-    prog.total_minutes += int(session_data.duration_seconds / 60)
-    # Estimate calories: ~7 kcal per minute of strength/calisthenic workout
-    estimated_cals = int((session_data.duration_seconds / 60) * 7.5)
+    duration_min = max(1, int(session_data.duration_seconds / 60))
+    prog.total_minutes += duration_min
+    estimated_cals = int(duration_min * 8.0)
     prog.total_calories_burned += estimated_cals
-    prog.last_workout_date = datetime.now(timezone.utc)
+    prog.last_workout_date = now
 
     db.commit()
     return {
         "message": "Workout session successfully recorded",
         "session_id": new_session.id,
-        "calories_burned": estimated_cals
+        "calories_burned": estimated_cals,
+        "streak_days": prog.streak_days
     }
+
 
 
 @app.get("/api/sessions")

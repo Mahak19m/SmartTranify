@@ -149,6 +149,41 @@ export const api = {
     return res.json();
   },
 
+  async getWorkoutSessions(limit: number = 20): Promise<any[]> {
+    const res = await fetch(`${API_BASE_URL}/api/sessions?limit=${limit}`, {
+      method: 'GET',
+      headers: this.getHeaders(),
+    });
+    if (!res.ok) {
+      throw new Error('Failed to fetch workout sessions');
+    }
+    return res.json();
+  },
+
+  async getWeightHistory(): Promise<any[]> {
+    const res = await fetch(`${API_BASE_URL}/api/progress`, {
+      method: 'GET',
+      headers: this.getHeaders(),
+    });
+    if (!res.ok) {
+      throw new Error('Failed to fetch weight history');
+    }
+    return res.json();
+  },
+
+  async logWeight(weight: number): Promise<any> {
+    const res = await fetch(`${API_BASE_URL}/api/progress`, {
+      method: 'POST',
+      headers: this.getHeaders(),
+      body: JSON.stringify({ weight }),
+    });
+    if (!res.ok) {
+      throw new Error('Failed to log weight');
+    }
+    return res.json();
+  },
+
+
   async sendCoachChatMessage(chatReq: {
     message: string;
     persona?: string;
