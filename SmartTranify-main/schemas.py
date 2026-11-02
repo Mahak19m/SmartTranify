@@ -1,31 +1,222 @@
-from pydantic import BaseModel, EmailStr
+from datetime import datetime
+from typing import Optional, List
+from pydantic import BaseModel, EmailStr, Field, ConfigDict
 
+
+# User & Auth Schemas
 class UserCreate(BaseModel):
-    name: str
+    name: str = Field(..., min_length=2, max_length=100)
     email: EmailStr
-    password: str
+    password: str = Field(..., min_length=6)
+
+
 class UserLogin(BaseModel):
     email: EmailStr
-    password: str    
+    password: str
+
+
 class UserUpdate(BaseModel):
-    age: int | None = None
-    weight: int | None = None
-    height: int | None = None
-    goal: str | None = None
+    age: Optional[int] = None
+    weight: Optional[float] = None
+    height: Optional[float] = None
+    goal: Optional[str] = None
+
+
+class UserResponse(BaseModel):
+    id: int
+    name: str
+    email: EmailStr
+    age: Optional[int] = None
+    weight: Optional[float] = None
+    height: Optional[float] = None
+    goal: Optional[str] = None
+    created_at: Optional[datetime] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class Token(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    user_id: int
+    name: str
+    email: str
+
+
+class TokenData(BaseModel):
+    user_id: Optional[int] = None
+
+
+# Fitness Profile Schemas
+class FitnessProfileBase(BaseModel):
+    name: Optional[str] = None
+    age: Optional[int] = None
+    height: Optional[float] = None  # cm
+    weight: Optional[float] = None  # kg
+    gender: Optional[str] = None
+    fitness_experience: Optional[str] = "intermediate"  # beginner, intermediate, advanced
+    fitness_goal: Optional[str] = "general_fitness"  # weight_loss, muscle_building, strength_training, etc.
+    activity_level: Optional[str] = "moderately_active"
+    available_workout_days: Optional[int] = 4
+    workout_duration: Optional[int] = 45  # minutes
+    available_equipment: Optional[str] = "Bodyweight, Dumbbells"
+    dietary_preference: Optional[str] = "vegetarian"  # vegetarian, vegan, non_vegetarian
+    food_allergies: Optional[str] = None
+    dietary_restrictions: Optional[str] = None
+    physical_limitations: Optional[str] = None
+    baseline_mobility_score: Optional[int] = None
+    baseline_notes: Optional[str] = None
+
+
+class FitnessProfileCreate(FitnessProfileBase):
+    pass
+
+
+class FitnessProfileUpdate(FitnessProfileBase):
+    pass
+
+
+class FitnessProfileResponse(FitnessProfileBase):
+    id: int
+    user_id: int
+    updated_at: Optional[datetime] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+# Exercise & Workout Schemas (Backwards compatible)
 class ExerciseCreate(BaseModel):
     name: str
-    sets: int
-    reps: int
-    weight: int | None = None
+    sets: int = 3
+    reps: int = 10
+    weight: Optional[float] = None
 
 
 class WorkoutCreate(BaseModel):
-    exercises: list[ExerciseCreate]
+    exercises: List[ExerciseCreate]
+
+
+# Session & Exercise Record Schemas
+class ExerciseRecordCreate(BaseModel):
+    name: str
+    sets_completed: int = 3
+    reps_completed: int = 10
+    target_reps: int = 10
+    weight_kg: Optional[float] = 0.0
+    avg_form_score: Optional[float] = 90.0
+    notes: Optional[str] = None
+
+
+class WorkoutSessionCreate(BaseModel):
+    title: str
+    plan_id: Optional[int] = None
+    duration_seconds: int = 0
+    total_volume_kg: float = 0.0
+    avg_form_score: float = 90.0
+    rpe: int = 7
+    notes: Optional[str] = None
+    exercise_records: Optional[List[ExerciseRecordCreate]] = []
+
+
+class WorkoutSessionResponse(BaseModel):
+    id: int
+    user_id: int
+    plan_id: Optional[int] = None
+    title: str
+    duration_seconds: int
+    total_volume_kg: float
+    avg_form_score: float
+    rpe: int
+    notes: Optional[str] = None
+    completed_at: datetime
+    exercise_records: List[ExerciseRecordCreate] = []
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+# Workout Plan Schemas
+class WorkoutPlanCreate(BaseModel):
+    title: str
+    description: Optional[str] = None
+    goal: str
+    difficulty: str = "intermediate"
+    estimated_duration_min: int = 35
+    exercises: Optional[List[ExerciseRecordCreate]] = []
+
+
+class WorkoutPlanResponse(BaseModel):
+    id: int
+    user_id: int
+    title: str
+    description: Optional[str] = None
+    goal: str
+    difficulty: str
+    estimated_duration_min: int
+    is_active: bool
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+# Meal & Diet Schemas
 class MealCreate(BaseModel):
     food_name: str
     calories: int
-    protein: int | None = None
-    carbs: int | None = None
-    fats: int | None = None
+    protein: Optional[float] = None
+    carbs: Optional[float] = None
+    fats: Optional[float] = None
+
+
+class MealRecordCreate(BaseModel):
+    meal_type: str  # Breakfast, Lunch, Snack, Dinner
+    food_name: str
+    calories: int
+    protein: float = 0.0
+    carbs: float = 0.0
+    fats: float = 0.0
+
+
+class DietPlanCreate(BaseModel):
+    title: str
+    goal: str
+    calories: int
+    protein_grams: int
+    carbs_grams: int
+    fats_grams: int
+    hydration_liters: float = 3.0
+
+
+class DietPlanResponse(BaseModel):
+    id: int
+    user_id: int
+    title: str
+    goal: str
+    calories: int
+    protein_grams: int
+    carbs_grams: int
+    fats_grams: int
+    hydration_liters: float
+    is_active: bool
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+# Progress & Weight Schemas
 class ProgressCreate(BaseModel):
-    weight: int
+    weight: float
+
+
+class WeightHistoryCreate(BaseModel):
+    weight: float
+    notes: Optional[str] = None
+
+
+class UserProgressResponse(BaseModel):
+    streak_days: int = 0
+    total_workouts: int = 0
+    total_minutes: int = 0
+    total_calories_burned: int = 0
+    last_workout_date: Optional[datetime] = None
+
+    model_config = ConfigDict(from_attributes=True)

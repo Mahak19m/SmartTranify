@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { UserIntake, PrimaryGoal, FitnessLevel } from '../types';
 import { Shield, Activity, Camera, CheckCircle2, ChevronRight, AlertTriangle, Sparkles, Dumbbell } from 'lucide-react';
+import { useAuth } from '../context/AuthContext';
 
 interface IntakeAssessmentModalProps {
   intakeData: UserIntake;
@@ -13,8 +14,23 @@ export const IntakeAssessmentModal: React.FC<IntakeAssessmentModalProps> = ({
   onSaveIntake,
   onComplete
 }) => {
+  const { profile, updateProfile, isAuthenticated } = useAuth();
   const [step, setStep] = useState<number>(1);
-  const [formData, setFormData] = useState<UserIntake>(intakeData);
+  const [formData, setFormData] = useState<UserIntake>(() => {
+    if (profile) {
+      return {
+        name: profile.name || intakeData.name,
+        age: profile.age || intakeData.age,
+        fitnessLevel: (profile.fitness_experience as FitnessLevel) || intakeData.fitnessLevel,
+        primaryGoal: (profile.fitness_goal as PrimaryGoal) || intakeData.primaryGoal,
+        injuries: profile.physical_limitations || intakeData.injuries,
+        availableEquipment: profile.available_equipment ? profile.available_equipment.split(', ') : intakeData.availableEquipment,
+        baselineMobilityScore: profile.baseline_mobility_score || intakeData.baselineMobilityScore,
+        baselineNotes: profile.baseline_notes || intakeData.baselineNotes,
+      };
+    }
+    return intakeData;
+  });
   const [isEvaluating, setIsEvaluating] = useState(false);
   const [assessmentReport, setAssessmentReport] = useState<any>(null);
   const [snapshotCaptured, setSnapshotCaptured] = useState<string | null>(null);
@@ -335,8 +351,24 @@ export const IntakeAssessmentModal: React.FC<IntakeAssessmentModalProps> = ({
 
           <div className="flex justify-end pt-2">
             <button
-              onClick={() => {
+              onClick={async () => {
                 onSaveIntake(formData);
+                if (isAuthenticated) {
+                  try {
+                    await updateProfile({
+                      name: formData.name,
+                      age: formData.age,
+                      fitness_experience: formData.fitnessLevel,
+                      fitness_goal: formData.primaryGoal,
+                      physical_limitations: formData.injuries,
+                      available_equipment: formData.availableEquipment?.join(', '),
+                      baseline_mobility_score: formData.baselineMobilityScore,
+                      baseline_notes: formData.baselineNotes,
+                    });
+                  } catch (e) {
+                    console.warn('Could not persist profile to backend:', e);
+                  }
+                }
                 onComplete();
               }}
               className="px-6 py-3 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-sm rounded-xl shadow-xl flex items-center space-x-2"

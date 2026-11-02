@@ -378,7 +378,7 @@ export const VideoConferenceStage: React.FC<VideoConferenceStageProps> = ({
       detailedFeedback: `Simulated form frame: ${sim.name}. Ghost overlay active.`,
       repDetected: sim.repDetected,
       hazardDetected: sim.hazardDetected,
-      hazardMessage: sim.hazardMessage,
+      hazardMessage: (sim as any).hazardMessage,
       spineNeutralityScore: sim.spineScore,
       kneeAlignmentScore: sim.kneeScore,
       telemetry: sim.telemetry,

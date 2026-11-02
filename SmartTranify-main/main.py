@@ -1,146 +1,335 @@
-from fastapi import FastAPI, Depends, HTTPException
+import os
+from typing import List, Optional
+from datetime import datetime, timezone, timedelta
+from fastapi import FastAPI, Depends, HTTPException, status
+from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
-from passlib.context import CryptContext
 
-from database import engine, SessionLocal
-from models import Base, User, Workout, Exercise, Meal, ProgressLog
-from schemas import UserCreate, UserLogin, UserUpdate, WorkoutCreate, MealCreate, ProgressCreate
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from auth import create_access_token, verify_token
+from database import engine, Base, get_db
+from models import (
+    User, FitnessProfile, Workout, Exercise, WorkoutPlan, WorkoutSession,
+    ExerciseRecord, DietPlan, Meal, MealRecord, ProgressLog, WeightHistory, UserProgress
+)
+from schemas import (
+    UserCreate, UserLogin, UserUpdate, UserResponse, Token,
+    FitnessProfileCreate, FitnessProfileUpdate, FitnessProfileResponse,
+    WorkoutCreate, WorkoutSessionCreate, WorkoutSessionResponse,
+    MealCreate, MealRecordCreate, ProgressCreate, WeightHistoryCreate,
+    UserProgressResponse
+)
+from auth import (
+    verify_password, get_password_hash, create_access_token,
+    get_current_user, verify_token, security
+)
+from fastapi.security import HTTPAuthorizationCredentials
 
-app = FastAPI()
-
+# Initialize database schema
 Base.metadata.create_all(bind=engine)
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-security = HTTPBearer()
+app = FastAPI(
+    title="SmartTranify AI Fitness API",
+    description="Backend API for SmartTranify - Real-Time AI Personal Fitness Trainer & Nutrition Coach",
+    version="2.0.0"
+)
+
+# CORS configuration
+cors_origins_env = os.getenv("CORS_ORIGINS", "http://localhost:3000,http://localhost:5173,http://127.0.0.1:3000,http://127.0.0.1:5173")
+origins = [origin.strip() for origin in cors_origins_env.split(",") if origin.strip()]
+if "*" not in origins:
+    origins.append("*")  # Allow local sandbox and preview origins
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
-
-
+# -------------------------------------------------------------
+# Health Check & Root Endpoints
+# -------------------------------------------------------------
 @app.get("/")
 def home():
-    return {"message": "Gym Fitness Backend Running"}
+    return {
+        "app": "SmartTranify AI Personal Fitness Trainer API",
+        "status": "online",
+        "version": "2.0.0",
+        "docs_url": "/docs"
+    }
 
 
-@app.post("/signup")
-def signup(user: UserCreate, db: Session = Depends(get_db)):
-    existing_user = db.query(User).filter(User.email == user.email).first()
+@app.get("/api/health")
+def health_check():
+    return {
+        "status": "healthy",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "database": engine.name
+    }
+
+
+# -------------------------------------------------------------
+# Authentication & User Management
+# -------------------------------------------------------------
+@app.post("/api/auth/register", response_model=Token, status_code=status.HTTP_201_CREATED)
+@app.post("/signup", response_model=Token, status_code=status.HTTP_201_CREATED)
+def register_user(user_in: UserCreate, db: Session = Depends(get_db)):
+    """Register a new user account with initial profile & progress tracking"""
+    existing_user = db.query(User).filter(User.email == user_in.email).first()
     if existing_user:
-        raise HTTPException(status_code=400, detail="Email already registered")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="An account with this email address already exists"
+        )
 
-    hashed_password = pwd_context.hash(user.password)
-
+    hashed_pw = get_password_hash(user_in.password)
     new_user = User(
-        name=user.name,
-        email=user.email,
-        password=hashed_password
+        name=user_in.name,
+        email=user_in.email,
+        password=hashed_pw
     )
     db.add(new_user)
     db.commit()
     db.refresh(new_user)
 
-    return {"message": "User created successfully", "user_id": new_user.id}
+    # Initialize default fitness profile
+    profile = FitnessProfile(
+        user_id=new_user.id,
+        name=new_user.name
+    )
+    db.add(profile)
 
+    # Initialize progress tracker
+    progress = UserProgress(
+        user_id=new_user.id,
+        streak_days=1,
+        total_workouts=0,
+        total_minutes=0,
+        total_calories_burned=0
+    )
+    db.add(progress)
+    db.commit()
 
-@app.post("/login")
-def login(user: UserLogin, db: Session = Depends(get_db)):
-    db_user = db.query(User).filter(User.email == user.email).first()
-
-    if not db_user:
-        raise HTTPException(status_code=400, detail="Invalid email or password")
-
-    if not pwd_context.verify(user.password, db_user.password):
-        raise HTTPException(status_code=400, detail="Invalid email or password")
-
-    access_token = create_access_token(data={"user_id": db_user.id})
-
+    token = create_access_token(data={"user_id": new_user.id, "email": new_user.email})
     return {
-        "message": "Login successful",
-        "access_token": access_token,
+        "access_token": token,
+        "token_type": "bearer",
+        "user_id": new_user.id,
+        "name": new_user.name,
+        "email": new_user.email
+    }
+
+
+@app.post("/api/auth/login", response_model=Token)
+@app.post("/login", response_model=Token)
+def login_user(credentials: UserLogin, db: Session = Depends(get_db)):
+    """Authenticate existing user and issue signed JWT access token"""
+    db_user = db.query(User).filter(User.email == credentials.email).first()
+    if not db_user or not verify_password(credentials.password, db_user.password):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid email or password"
+        )
+
+    token = create_access_token(data={"user_id": db_user.id, "email": db_user.email})
+    return {
+        "access_token": token,
         "token_type": "bearer",
         "user_id": db_user.id,
-        "name": db_user.name
+        "name": db_user.name,
+        "email": db_user.email
     }
 
 
-@app.get("/me")
-def get_me(credentials: HTTPAuthorizationCredentials = Depends(security), db: Session = Depends(get_db)):
-    token = credentials.credentials
-    payload = verify_token(token)
-    if payload is None:
-        raise HTTPException(status_code=401, detail="Invalid or expired token")
-
-    user_id = payload.get("user_id")
-    db_user = db.query(User).filter(User.id == user_id).first()
-
-    if not db_user:
-        raise HTTPException(status_code=404, detail="User not found")
-
-    return {"id": db_user.id, "name": db_user.name, "email": db_user.email}
+@app.get("/api/auth/me", response_model=UserResponse)
+@app.get("/me", response_model=UserResponse)
+def get_current_user_profile(current_user: User = Depends(get_current_user)):
+    """Fetch profile of currently authenticated user"""
+    return current_user
 
 
-@app.put("/me")
-def update_me(
+@app.put("/api/auth/me", response_model=UserResponse)
+@app.put("/me", response_model=UserResponse)
+def update_user_profile(
     updates: UserUpdate,
-    credentials: HTTPAuthorizationCredentials = Depends(security),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    token = credentials.credentials
-    payload = verify_token(token)
-    if payload is None:
-        raise HTTPException(status_code=401, detail="Invalid or expired token")
-
-    user_id = payload.get("user_id")
-    db_user = db.query(User).filter(User.id == user_id).first()
-
-    if not db_user:
-        raise HTTPException(status_code=404, detail="User not found")
-
+    """Update basic user biometric attributes"""
     if updates.age is not None:
-        db_user.age = updates.age
+        current_user.age = updates.age
     if updates.weight is not None:
-        db_user.weight = updates.weight
+        current_user.weight = updates.weight
     if updates.height is not None:
-        db_user.height = updates.height
+        current_user.height = updates.height
     if updates.goal is not None:
-        db_user.goal = updates.goal
+        current_user.goal = updates.goal
 
     db.commit()
-    db.refresh(db_user)
+    db.refresh(current_user)
+    return current_user
 
+
+# -------------------------------------------------------------
+# Fitness Profile Management (Comprehensive 15-field profile)
+# -------------------------------------------------------------
+@app.get("/api/profile", response_model=FitnessProfileResponse)
+def get_user_fitness_profile(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Retrieve full fitness profile for authenticated user"""
+    profile = db.query(FitnessProfile).filter(FitnessProfile.user_id == current_user.id).first()
+    if not profile:
+        profile = FitnessProfile(user_id=current_user.id, name=current_user.name)
+        db.add(profile)
+        db.commit()
+        db.refresh(profile)
+    return profile
+
+
+@app.post("/api/profile", response_model=FitnessProfileResponse)
+@app.put("/api/profile", response_model=FitnessProfileResponse)
+def save_user_fitness_profile(
+    profile_data: FitnessProfileUpdate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Save or update full fitness assessment and onboarding details"""
+    profile = db.query(FitnessProfile).filter(FitnessProfile.user_id == current_user.id).first()
+    if not profile:
+        profile = FitnessProfile(user_id=current_user.id)
+        db.add(profile)
+
+    update_dict = profile_data.model_dump(exclude_unset=True)
+    for key, value in update_dict.items():
+        setattr(profile, key, value)
+
+    # Keep user table in sync with primary metrics
+    if profile.weight is not None:
+        current_user.weight = profile.weight
+    if profile.height is not None:
+        current_user.height = profile.height
+    if profile.age is not None:
+        current_user.age = profile.age
+    if profile.fitness_goal is not None:
+        current_user.goal = profile.fitness_goal
+
+    profile.updated_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(profile)
+    return profile
+
+
+# -------------------------------------------------------------
+# Workout Logging & Sessions
+# -------------------------------------------------------------
+@app.post("/api/sessions", status_code=status.HTTP_201_CREATED)
+def record_workout_session(
+    session_data: WorkoutSessionCreate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Persist a completed live workout session with exercise kinematics and rep records"""
+    new_session = WorkoutSession(
+        user_id=current_user.id,
+        plan_id=session_data.plan_id,
+        title=session_data.title,
+        duration_seconds=session_data.duration_seconds,
+        total_volume_kg=session_data.total_volume_kg,
+        avg_form_score=session_data.avg_form_score,
+        rpe=session_data.rpe,
+        notes=session_data.notes,
+        completed_at=datetime.now(timezone.utc)
+    )
+    db.add(new_session)
+    db.commit()
+    db.refresh(new_session)
+
+    if session_data.exercise_records:
+        for ex in session_data.exercise_records:
+            record = ExerciseRecord(
+                session_id=new_session.id,
+                name=ex.name,
+                sets_completed=ex.sets_completed,
+                reps_completed=ex.reps_completed,
+                target_reps=ex.target_reps,
+                weight_kg=ex.weight_kg,
+                avg_form_score=ex.avg_form_score,
+                notes=ex.notes
+            )
+            db.add(record)
+
+    # Update User Progress Stats
+    prog = db.query(UserProgress).filter(UserProgress.user_id == current_user.id).first()
+    if not prog:
+        prog = UserProgress(user_id=current_user.id)
+        db.add(prog)
+
+    prog.total_workouts += 1
+    prog.total_minutes += int(session_data.duration_seconds / 60)
+    # Estimate calories: ~7 kcal per minute of strength/calisthenic workout
+    estimated_cals = int((session_data.duration_seconds / 60) * 7.5)
+    prog.total_calories_burned += estimated_cals
+    prog.last_workout_date = datetime.now(timezone.utc)
+
+    db.commit()
     return {
-        "message": "Profile updated successfully",
-        "id": db_user.id,
-        "name": db_user.name,
-        "email": db_user.email,
-        "age": db_user.age,
-        "weight": db_user.weight,
-        "height": db_user.height,
-        "goal": db_user.goal
+        "message": "Workout session successfully recorded",
+        "session_id": new_session.id,
+        "calories_burned": estimated_cals
     }
 
 
+@app.get("/api/sessions")
+def get_workout_sessions(
+    limit: int = 20,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get history of completed workout sessions"""
+    sessions = (
+        db.query(WorkoutSession)
+        .filter(WorkoutSession.user_id == current_user.id)
+        .order_by(WorkoutSession.completed_at.desc())
+        .limit(limit)
+        .all()
+    )
+    result = []
+    for s in sessions:
+        exercises = db.query(ExerciseRecord).filter(ExerciseRecord.session_id == s.id).all()
+        result.append({
+            "id": s.id,
+            "title": s.title,
+            "completed_at": s.completed_at,
+            "duration_minutes": round(s.duration_seconds / 60, 1),
+            "total_volume_kg": s.total_volume_kg,
+            "avg_form_score": s.avg_form_score,
+            "rpe": s.rpe,
+            "notes": s.notes,
+            "exercises": [
+                {
+                    "name": e.name,
+                    "sets": e.sets_completed,
+                    "reps": e.reps_completed,
+                    "weight_kg": e.weight_kg,
+                    "form_score": e.avg_form_score
+                }
+                for e in exercises
+            ]
+        })
+    return result
+
+
+# Legacy Workout endpoints (kept for backward compatibility)
 @app.post("/workouts")
 def create_workout(
     workout: WorkoutCreate,
-    credentials: HTTPAuthorizationCredentials = Depends(security),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    token = credentials.credentials
-    payload = verify_token(token)
-    if payload is None:
-        raise HTTPException(status_code=401, detail="Invalid or expired token")
-
-    user_id = payload.get("user_id")
-
-    new_workout = Workout(user_id=user_id)
+    new_workout = Workout(user_id=current_user.id)
     db.add(new_workout)
     db.commit()
     db.refresh(new_workout)
@@ -156,23 +345,15 @@ def create_workout(
         db.add(new_exercise)
 
     db.commit()
-
     return {"message": "Workout logged successfully", "workout_id": new_workout.id}
 
 
 @app.get("/workouts")
 def get_workouts(
-    credentials: HTTPAuthorizationCredentials = Depends(security),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    token = credentials.credentials
-    payload = verify_token(token)
-    if payload is None:
-        raise HTTPException(status_code=401, detail="Invalid or expired token")
-
-    user_id = payload.get("user_id")
-    workouts = db.query(Workout).filter(Workout.user_id == user_id).all()
-
+    workouts = db.query(Workout).filter(Workout.user_id == current_user.id).all()
     result = []
     for w in workouts:
         exercises = db.query(Exercise).filter(Exercise.workout_id == w.id).all()
@@ -184,92 +365,40 @@ def get_workouts(
                 for e in exercises
             ]
         })
-
     return result
 
 
 @app.delete("/workouts/{workout_id}")
 def delete_workout(
     workout_id: int,
-    credentials: HTTPAuthorizationCredentials = Depends(security),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    token = credentials.credentials
-    payload = verify_token(token)
-    if payload is None:
-        raise HTTPException(status_code=401, detail="Invalid or expired token")
-
-    user_id = payload.get("user_id")
-
     workout = db.query(Workout).filter(
         Workout.id == workout_id,
-        Workout.user_id == user_id
+        Workout.user_id == current_user.id
     ).first()
-
     if not workout:
         raise HTTPException(status_code=404, detail="Workout not found")
 
     db.query(Exercise).filter(Exercise.workout_id == workout_id).delete()
     db.delete(workout)
     db.commit()
-
     return {"message": "Workout deleted successfully"}
 
 
-@app.put("/workouts/{workout_id}")
-def update_workout(
-    workout_id: int,
-    workout_update: WorkoutCreate,
-    credentials: HTTPAuthorizationCredentials = Depends(security),
-    db: Session = Depends(get_db)
-):
-    token = credentials.credentials
-    payload = verify_token(token)
-    if payload is None:
-        raise HTTPException(status_code=401, detail="Invalid or expired token")
-
-    user_id = payload.get("user_id")
-
-    workout = db.query(Workout).filter(
-        Workout.id == workout_id,
-        Workout.user_id == user_id
-    ).first()
-
-    if not workout:
-        raise HTTPException(status_code=404, detail="Workout not found")
-
-    db.query(Exercise).filter(Exercise.workout_id == workout_id).delete()
-
-    for ex in workout_update.exercises:
-        new_exercise = Exercise(
-            workout_id=workout.id,
-            name=ex.name,
-            sets=ex.sets,
-            reps=ex.reps,
-            weight=ex.weight
-        )
-        db.add(new_exercise)
-
-    db.commit()
-
-    return {"message": "Workout updated successfully", "workout_id": workout.id}
-
-
-@app.post("/meals")
+# -------------------------------------------------------------
+# Meals & Nutrition Endpoints
+# -------------------------------------------------------------
+@app.post("/api/meals", status_code=status.HTTP_201_CREATED)
+@app.post("/meals", status_code=status.HTTP_201_CREATED)
 def create_meal(
     meal: MealCreate,
-    credentials: HTTPAuthorizationCredentials = Depends(security),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    token = credentials.credentials
-    payload = verify_token(token)
-    if payload is None:
-        raise HTTPException(status_code=401, detail="Invalid or expired token")
-
-    user_id = payload.get("user_id")
-
     new_meal = Meal(
-        user_id=user_id,
+        user_id=current_user.id,
         food_name=meal.food_name,
         calories=meal.calories,
         protein=meal.protein,
@@ -279,23 +408,16 @@ def create_meal(
     db.add(new_meal)
     db.commit()
     db.refresh(new_meal)
-
     return {"message": "Meal logged successfully", "meal_id": new_meal.id}
 
 
+@app.get("/api/meals")
 @app.get("/meals")
 def get_meals(
-    credentials: HTTPAuthorizationCredentials = Depends(security),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    token = credentials.credentials
-    payload = verify_token(token)
-    if payload is None:
-        raise HTTPException(status_code=401, detail="Invalid or expired token")
-
-    user_id = payload.get("user_id")
-    meals = db.query(Meal).filter(Meal.user_id == user_id).all()
-
+    meals = db.query(Meal).filter(Meal.user_id == current_user.id).order_by(Meal.date.desc()).all()
     return [
         {
             "meal_id": m.id,
@@ -310,69 +432,79 @@ def get_meals(
     ]
 
 
+@app.delete("/api/meals/{meal_id}")
 @app.delete("/meals/{meal_id}")
 def delete_meal(
     meal_id: int,
-    credentials: HTTPAuthorizationCredentials = Depends(security),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    token = credentials.credentials
-    payload = verify_token(token)
-    if payload is None:
-        raise HTTPException(status_code=401, detail="Invalid or expired token")
-
-    user_id = payload.get("user_id")
-
     meal = db.query(Meal).filter(
         Meal.id == meal_id,
-        Meal.user_id == user_id
+        Meal.user_id == current_user.id
     ).first()
-
     if not meal:
         raise HTTPException(status_code=404, detail="Meal not found")
 
     db.delete(meal)
     db.commit()
-
     return {"message": "Meal deleted successfully"}
-@app.post("/progress")
+
+
+# -------------------------------------------------------------
+# Progress & Weight Tracking
+# -------------------------------------------------------------
+@app.post("/api/progress", status_code=status.HTTP_201_CREATED)
+@app.post("/progress", status_code=status.HTTP_201_CREATED)
 def log_progress(
     progress: ProgressCreate,
-    credentials: HTTPAuthorizationCredentials = Depends(security),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    token = credentials.credentials
-    payload = verify_token(token)
-    if payload is None:
-        raise HTTPException(status_code=401, detail="Invalid or expired token")
-
-    user_id = payload.get("user_id")
-
-    new_log = ProgressLog(
-        user_id=user_id,
-        weight=progress.weight
-    )
+    new_log = ProgressLog(user_id=current_user.id, weight=progress.weight)
     db.add(new_log)
-    db.commit()
-    db.refresh(new_log)
 
+    # Record in weight history as well
+    wh = WeightHistory(user_id=current_user.id, weight=progress.weight)
+    db.add(wh)
+
+    # Sync user weight
+    current_user.weight = progress.weight
+    db.commit()
     return {"message": "Progress logged successfully", "log_id": new_log.id}
 
 
+@app.get("/api/progress")
 @app.get("/progress")
 def get_progress(
-    credentials: HTTPAuthorizationCredentials = Depends(security),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    token = credentials.credentials
-    payload = verify_token(token)
-    if payload is None:
-        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    logs = (
+        db.query(ProgressLog)
+        .filter(ProgressLog.user_id == current_user.id)
+        .order_by(ProgressLog.date.asc())
+        .all()
+    )
+    return [{"log_id": l.id, "weight": l.weight, "date": l.date} for l in logs]
 
-    user_id = payload.get("user_id")
-    logs = db.query(ProgressLog).filter(ProgressLog.user_id == user_id).order_by(ProgressLog.date).all()
 
-    return [
-        {"log_id": l.id, "weight": l.weight, "date": l.date}
-        for l in logs
-    ]
+@app.get("/api/progress/summary", response_model=UserProgressResponse)
+def get_progress_summary(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Retrieve cumulative fitness metrics (streak, workouts, minutes, calories)"""
+    prog = db.query(UserProgress).filter(UserProgress.user_id == current_user.id).first()
+    if not prog:
+        prog = UserProgress(
+            user_id=current_user.id,
+            streak_days=1,
+            total_workouts=0,
+            total_minutes=0,
+            total_calories_burned=0
+        )
+        db.add(prog)
+        db.commit()
+        db.refresh(prog)
+    return prog

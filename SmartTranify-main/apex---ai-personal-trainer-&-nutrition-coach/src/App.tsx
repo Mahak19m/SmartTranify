@@ -1,5 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import { AuthProvider, useAuth } from './context/AuthContext';
 import { Navbar } from './components/Navbar';
+import { AuthModal } from './components/AuthModal';
 import { VideoConferenceStage } from './components/VideoConferenceStage';
 import { IntakeAssessmentModal } from './components/IntakeAssessmentModal';
 import { WorkoutLibraryView } from './components/WorkoutLibraryView';
@@ -8,15 +10,17 @@ import { NutritionCoachView } from './components/NutritionCoachView';
 import { ProgressAnalyticsView } from './components/ProgressAnalyticsView';
 import { PainAlertModal } from './components/PainAlertModal';
 import { CoachChatWidget } from './components/CoachChatWidget';
-import { EXERCISES_DATABASE, SAMPLE_WORKOUT_PLANS } from './data/exercisesData';
-import { UserIntake, Exercise, WorkoutPlan } from './types';
+import { EXERCISES_DATABASE } from './data/exercisesData';
+import { UserIntake, Exercise, WorkoutPlan, PrimaryGoal, FitnessLevel } from './types';
 
-export default function App() {
+function AppContent() {
+  const { user, profile, isAuthenticated } = useAuth();
   const [activeTab, setActiveTab] = useState<string>('stage');
   const [voiceCuesEnabled, setVoiceCuesEnabled] = useState<boolean>(true);
   const [isPainModalOpen, setIsPainModalOpen] = useState<boolean>(false);
+  const [isAuthModalOpen, setIsAuthModalOpen] = useState<boolean>(false);
 
-  // User Intake Profile State
+  // User Intake Profile State synchronized with Auth Profile
   const [userIntake, setUserIntake] = useState<UserIntake>({
     name: 'Alex Vance',
     age: 28,
@@ -27,6 +31,29 @@ export default function App() {
     baselineMobilityScore: 88,
     baselineNotes: 'Good knee tracking. Recommended focus on keeping chest elevated.'
   });
+
+  useEffect(() => {
+    if (profile) {
+      setUserIntake((prev) => ({
+        ...prev,
+        name: profile.name || user?.name || prev.name,
+        age: profile.age || prev.age,
+        fitnessLevel: (profile.fitness_experience as FitnessLevel) || prev.fitnessLevel,
+        primaryGoal: (profile.fitness_goal as PrimaryGoal) || prev.primaryGoal,
+        injuries: profile.physical_limitations || prev.injuries,
+        availableEquipment: profile.available_equipment ? profile.available_equipment.split(', ') : prev.availableEquipment,
+        baselineMobilityScore: profile.baseline_mobility_score || prev.baselineMobilityScore,
+        baselineNotes: profile.baseline_notes || prev.baselineNotes,
+      }));
+    } else if (user) {
+      setUserIntake((prev) => ({
+        ...prev,
+        name: user.name,
+        age: user.age || prev.age,
+        primaryGoal: (user.goal as PrimaryGoal) || prev.primaryGoal,
+      }));
+    }
+  }, [profile, user]);
 
   // Active Exercise & Rep Counting State
   const [currentExercise, setCurrentExercise] = useState<Exercise>(EXERCISES_DATABASE[0]);
@@ -70,7 +97,7 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 font-sans selection:bg-emerald-500 selection:text-slate-950 flex flex-col antialiased">
+    <div className="min-h-screen bg-slate-950 text-slate-100 font-sans selection:bg-lime-400 selection:text-zinc-950 flex flex-col antialiased">
       {/* Top Navbar Header */}
       <Navbar
         activeTab={activeTab}
@@ -79,6 +106,7 @@ export default function App() {
         setVoiceCuesEnabled={setVoiceCuesEnabled}
         onEmergencyPain={() => setIsPainModalOpen(true)}
         isWebcamActive={false}
+        onOpenAuth={() => setIsAuthModalOpen(true)}
       />
 
       {/* Main Content Stage View */}
@@ -129,6 +157,12 @@ export default function App() {
       {/* Interactive AI Coach Chat Assistant */}
       <CoachChatWidget />
 
+      {/* Authentication Modal */}
+      <AuthModal
+        isOpen={isAuthModalOpen}
+        onClose={() => setIsAuthModalOpen(false)}
+      />
+
       {/* Emergency Pain Alert Modal */}
       <PainAlertModal
         isOpen={isPainModalOpen}
@@ -138,12 +172,20 @@ export default function App() {
       {/* Footer Branding & Disclaimer */}
       <footer className="bg-slate-900 border-t border-slate-800/80 py-4 px-4 text-center text-xs text-slate-500 space-y-1">
         <p>
-          <strong className="text-slate-400">APEX AI CERTIFIED COACH</strong> — Real-Time Video Conference & Biomechanics Form Analysis
+          <strong className="text-slate-400">SMARTTRANIFY AI PERSONAL TRAINER</strong> — Real-Time Computer Vision & Biomechanics
         </p>
         <p className="text-[11px] text-slate-600">
-          Disclaimer: Apex is an AI personal trainer. Exercise advice does not replace professional medical diagnosis or physical therapy.
+          Disclaimer: SmartTranify is an AI personal trainer. Exercise advice does not replace professional medical diagnosis or physical therapy.
         </p>
       </footer>
     </div>
+  );
+}
+
+export default function App() {
+  return (
+    <AuthProvider>
+      <AppContent />
+    </AuthProvider>
   );
 }
