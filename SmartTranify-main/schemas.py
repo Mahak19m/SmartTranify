@@ -158,6 +158,28 @@ class WorkoutPlanResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class WorkoutGenerateRequest(BaseModel):
+    goal: Optional[str] = None
+    experience: Optional[str] = None
+    available_equipment: Optional[List[str]] = None
+    days_per_week: Optional[int] = 4
+    target_duration_min: Optional[int] = 40
+
+
+class WorkoutPlanDetailResponse(BaseModel):
+    id: Optional[int] = None
+    title: str
+    description: str
+    goal: str
+    difficulty: str
+    estimated_duration_min: int
+    exercises: List[dict]
+    progressive_overload_notes: str
+    recovery_recommendations: str
+    is_active: bool = True
+
+
+
 # Meal & Diet Schemas
 class MealCreate(BaseModel):
     food_name: str
@@ -200,6 +222,36 @@ class DietPlanResponse(BaseModel):
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class DietGenerateRequest(BaseModel):
+    dietary_preference: Optional[str] = "vegetarian"
+    goal: Optional[str] = None
+    weight_kg: Optional[float] = None
+    height_cm: Optional[float] = None
+    age: Optional[int] = None
+    gender: Optional[str] = None
+    activity_level: Optional[str] = None
+
+
+class DietPlanDetailResponse(BaseModel):
+    id: Optional[int] = None
+    title: str
+    goal: str
+    dietary_preference: str
+    calories: int
+    protein_grams: int
+    carbs_grams: int
+    fats_grams: int
+    hydration_liters: float
+    bmr: int
+    tdee: int
+    meals: List[dict]
+    pre_workout: List[str]
+    post_workout: List[str]
+    guidelines: List[str]
+    is_active: bool = True
+
 
 
 # Progress & Weight Schemas

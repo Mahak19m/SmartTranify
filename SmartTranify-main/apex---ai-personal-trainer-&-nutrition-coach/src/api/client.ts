@@ -171,6 +171,68 @@ export const api = {
     return res.json();
   },
 
+  async generateWorkoutPlan(req: {
+    goal?: string;
+    experience?: string;
+    available_equipment?: string[];
+    days_per_week?: number;
+    target_duration_min?: number;
+  }): Promise<any> {
+    const res = await fetch(`${API_BASE_URL}/api/workouts/generate`, {
+      method: 'POST',
+      headers: this.getHeaders(),
+      body: JSON.stringify(req),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: 'Failed to generate workout plan' }));
+      throw new Error(err.detail || 'Failed to generate workout plan');
+    }
+    return res.json();
+  },
+
+  async getWorkoutPlans(): Promise<any[]> {
+    const res = await fetch(`${API_BASE_URL}/api/workouts/plans`, {
+      method: 'GET',
+      headers: this.getHeaders(),
+    });
+    if (!res.ok) {
+      throw new Error('Failed to fetch workout plans');
+    }
+    return res.json();
+  },
+
+  async generateDietPlan(req: {
+    dietary_preference?: string;
+    goal?: string;
+    weight_kg?: number;
+    height_cm?: number;
+    age?: number;
+    gender?: string;
+    activity_level?: string;
+  }): Promise<any> {
+    const res = await fetch(`${API_BASE_URL}/api/diet/generate`, {
+      method: 'POST',
+      headers: this.getHeaders(),
+      body: JSON.stringify(req),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: 'Failed to generate diet plan' }));
+      throw new Error(err.detail || 'Failed to generate diet plan');
+    }
+    return res.json();
+  },
+
+  async getActiveDietPlan(): Promise<any> {
+    const res = await fetch(`${API_BASE_URL}/api/diet/active`, {
+      method: 'GET',
+      headers: this.getHeaders(),
+    });
+    if (!res.ok) {
+      throw new Error('Failed to fetch active diet plan');
+    }
+    return res.json();
+  },
+
   logout() {
     localStorage.removeItem('smarttranify_token');
   }
