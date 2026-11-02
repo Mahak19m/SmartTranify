@@ -2,6 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { UserIntake, PrimaryGoal, FitnessLevel } from '../types';
 import { Shield, Activity, Camera, CheckCircle2, ChevronRight, AlertTriangle, Sparkles, Dumbbell } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
+import { api } from '../api/client';
+
 
 interface IntakeAssessmentModalProps {
   intakeData: UserIntake;
@@ -57,29 +59,22 @@ export const IntakeAssessmentModal: React.FC<IntakeAssessmentModalProps> = ({
   const runAIBaselineAssessment = async () => {
     setIsEvaluating(true);
     try {
-      const res = await fetch('/api/apex/assess-intake', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          name: formData.name,
-          age: formData.age,
-          fitnessLevel: formData.fitnessLevel,
-          primaryGoal: formData.primaryGoal,
-          injuries: formData.injuries,
-          equipment: formData.availableEquipment,
-          baselineImageBase64: snapshotCaptured || undefined
-        })
+      const report = await api.assessIntake({
+        name: formData.name,
+        age: formData.age,
+        fitnessLevel: formData.fitnessLevel,
+        primaryGoal: formData.primaryGoal,
+        injuries: formData.injuries,
+        equipment: formData.availableEquipment,
+        baselineImageBase64: snapshotCaptured || undefined
       });
 
-      if (res.ok) {
-        const report = await res.json();
-        setAssessmentReport(report);
-        setFormData((prev) => ({
-          ...prev,
-          baselineMobilityScore: report.baselineMobilityScore,
-          baselineNotes: report.baselineNotes
-        }));
-      }
+      setAssessmentReport(report);
+      setFormData((prev) => ({
+        ...prev,
+        baselineMobilityScore: report.baselineMobilityScore,
+        baselineNotes: report.baselineNotes
+      }));
     } catch (err) {
       console.error('Assessment error:', err);
     } finally {

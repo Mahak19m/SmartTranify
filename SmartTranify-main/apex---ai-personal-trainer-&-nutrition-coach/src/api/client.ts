@@ -268,6 +268,42 @@ export const api = {
     return res.json();
   },
 
+  async scanEnvironment(imageBase64?: string): Promise<any> {
+    const res = await fetch(`${API_BASE_URL}/api/apex/scan-environment`, {
+      method: 'POST',
+      headers: this.getHeaders(),
+      body: JSON.stringify({ imageBase64 }),
+    });
+    if (!res.ok) {
+      throw new Error('Failed to scan environment');
+    }
+    return res.json();
+  },
+
+  async assessIntake(intakeData: any): Promise<any> {
+    const res = await fetch(`${API_BASE_URL}/api/apex/assess-intake`, {
+      method: 'POST',
+      headers: this.getHeaders(),
+      body: JSON.stringify(intakeData),
+    });
+    if (!res.ok) {
+      throw new Error('Failed to assess intake');
+    }
+    return res.json();
+  },
+
+  async analyzeFormSnapshot(snapshotData: any): Promise<any> {
+    const res = await fetch(`${API_BASE_URL}/api/apex/analyze-form`, {
+      method: 'POST',
+      headers: this.getHeaders(),
+      body: JSON.stringify(snapshotData),
+    });
+    if (!res.ok) {
+      throw new Error('Failed to analyze form snapshot');
+    }
+    return res.json();
+  },
+
   logout() {
     localStorage.removeItem('smarttranify_token');
   }

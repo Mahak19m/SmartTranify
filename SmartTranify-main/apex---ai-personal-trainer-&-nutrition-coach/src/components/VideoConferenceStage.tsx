@@ -763,20 +763,15 @@ export const VideoConferenceStage: React.FC<VideoConferenceStageProps> = ({
         }
       }
 
-      const res = await fetch('/api/apex/analyze-form', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          exerciseName: currentExercise.name,
-          imageBase64: imageBase64 || undefined,
-          currentReps: currentRep,
-          targetReps: localTargetReps,
-          setNumber: currentSet
-        })
+      const data = await api.analyzeFormSnapshot({
+        exerciseName: currentExercise.name,
+        imageBase64: imageBase64 || undefined,
+        currentReps: currentRep,
+        targetReps: localTargetReps,
+        setNumber: currentSet
       });
 
-      if (res.ok) {
-        const data = await res.json();
+      if (data) {
         setAnalysisResult((prev) => ({
           ...prev,
           status: data.status || prev.status,

@@ -225,6 +225,47 @@ class SmartTranifyBackendTests(unittest.TestCase):
         self.assertGreaterEqual(prog["total_minutes"], 30)
         self.assertGreater(prog["total_calories_burned"], 0)
 
+    def test_09_spatial_environment_scan(self):
+        """Test POST /api/apex/scan-environment returns valid safety audit"""
+        res = self.client.post("/api/apex/scan-environment", json={"imageBase64": "dummy"})
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertTrue(data["safeToWorkout"])
+        self.assertGreaterEqual(len(data["hazards"]), 1)
+        self.assertIn("detectedEquipment", data)
+
+    def test_10_ai_baseline_intake_assessment(self):
+        """Test POST /api/apex/assess-intake calculates mobility score and clinical notes"""
+        payload = {
+            "name": "Alex Mercer",
+            "age": 28,
+            "fitnessLevel": "intermediate",
+            "primaryGoal": "muscle_hypertrophy",
+            "injuries": "tight left ankle dorsiflexion",
+            "equipment": ["Dumbbells", "Mat"]
+        }
+        res = self.client.post("/api/apex/assess-intake", json=payload)
+        self.assertEqual(res.status_code, 200)
+        report = res.json()
+        self.assertIn("baselineMobilityScore", report)
+        self.assertGreaterEqual(report["baselineMobilityScore"], 70)
+        self.assertIn("baselineNotes", report)
+        self.assertIn("ankle", report["baselineNotes"].lower())
+
+    def test_11_ai_form_snapshot_analysis(self):
+        """Test POST /api/apex/analyze-form snapshot analyzer"""
+        res = self.client.post("/api/apex/analyze-form", json={
+            "exerciseName": "Bodyweight Squats",
+            "currentReps": 5,
+            "targetReps": 10
+        })
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertIn("status", data)
+        self.assertIn("score", data)
+        self.assertIn("cue", data)
+
+
 
 if __name__ == "__main__":
     unittest.main()

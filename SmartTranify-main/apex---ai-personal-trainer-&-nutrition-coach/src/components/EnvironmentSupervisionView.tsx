@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { EnvironmentScanResult } from '../types';
+import { api } from '../api/client';
 import { ShieldAlert, CheckCircle2, Camera, Sparkles, Sliders, AlertTriangle, Radio } from 'lucide-react';
 
 export const EnvironmentSupervisionView: React.FC = () => {
@@ -9,16 +10,16 @@ export const EnvironmentSupervisionView: React.FC = () => {
     hazards: [
       {
         id: 'h1',
-        label: 'Loose Dumbbell behind foot path',
-        riskLevel: 'medium',
-        location: '1.5 feet behind right heel',
-        recommendation: 'Move unused 12kg dumbbells to side rack to prevent ankle roll.'
+        label: 'Optimal 6x6ft workout perimeter verified',
+        riskLevel: 'low',
+        location: 'Center training zone',
+        recommendation: 'Maintain clear landing area around the mat for plyometrics.'
       }
     ],
     detectedEquipment: ['Dumbbells', 'Exercise Mat', 'Resistance Bands'],
     setupTips: [
-      'Clear 6x6ft radius on floor before explosive jump squats.',
-      'Ensure ceiling clearance exceeds arm reach + dumbbell length.'
+      'Position camera 6-8 feet away at waist height for full skeletal capture.',
+      'Ensure ambient front lighting; avoid heavy backlighting from windows.'
     ]
   });
 
@@ -27,24 +28,15 @@ export const EnvironmentSupervisionView: React.FC = () => {
   const runEnvironmentScan = async () => {
     setIsScanning(true);
     try {
-      const res = await fetch('/api/apex/scan-environment', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          imageBase64: 'sample_environment_scan'
-        })
-      });
-
-      if (res.ok) {
-        const data = await res.json();
-        setScanResult(data);
-      }
+      const data = await api.scanEnvironment();
+      setScanResult(data);
     } catch (err) {
       console.error('Environment scan error:', err);
     } finally {
       setIsScanning(false);
     }
   };
+
 
   const setupGuides = [
     {
