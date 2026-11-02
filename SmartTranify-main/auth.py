@@ -94,3 +94,21 @@ def get_current_user(
         )
 
     return user
+
+
+def get_optional_user(
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
+    db: Session = Depends(get_db)
+):
+    """Optional dependency that returns User if valid Bearer token provided, or None otherwise"""
+    from models import User
+    if not credentials or not credentials.credentials:
+        return None
+    payload = verify_token(credentials.credentials)
+    if not payload:
+        return None
+    user_id = payload.get("user_id")
+    if not user_id:
+        return None
+    return db.query(User).filter(User.id == user_id).first()
+

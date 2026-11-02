@@ -149,6 +149,28 @@ export const api = {
     return res.json();
   },
 
+  async sendCoachChatMessage(chatReq: {
+    message: string;
+    persona?: string;
+    exercise_name?: string;
+    rep_count?: number;
+    current_set?: number;
+    target_reps?: number;
+    form_status?: string;
+    hazard_message?: string;
+  }): Promise<{ reply: string; persona: string; source: string; suggested_cues?: string[] }> {
+    const res = await fetch(`${API_BASE_URL}/api/apex/chat`, {
+      method: 'POST',
+      headers: this.getHeaders(),
+      body: JSON.stringify(chatReq),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: 'Failed to send coach message' }));
+      throw new Error(err.detail || 'Failed to send coach message');
+    }
+    return res.json();
+  },
+
   logout() {
     localStorage.removeItem('smarttranify_token');
   }

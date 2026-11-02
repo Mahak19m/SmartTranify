@@ -44,6 +44,7 @@ import {
   ExerciseStateMachine,
   MovementPhase
 } from '../services/exerciseStateMachine';
+import { speechService } from '../services/speechService';
 import { api } from '../api/client';
 import { useAuth } from '../context/AuthContext';
 import type { PoseLandmarker } from '@mediapipe/tasks-vision';
@@ -63,7 +64,9 @@ interface VideoConferenceStageProps {
   onTotalSetsChange?: (sets: number) => void;
   onSetCompleted?: () => void;
   onResetSession?: () => void;
+  onOpenVoiceSettings?: () => void;
 }
+
 
 // Sound synthesizer for clean athletic audio cues
 function playTone(freq = 660, durationMs = 140) {
@@ -207,7 +210,8 @@ export const VideoConferenceStage: React.FC<VideoConferenceStageProps> = ({
   onTargetRepsChange,
   onTotalSetsChange,
   onSetCompleted,
-  onResetSession
+  onResetSession,
+  onOpenVoiceSettings
 }) => {
   const { isAuthenticated } = useAuth();
 
@@ -298,10 +302,15 @@ export const VideoConferenceStage: React.FC<VideoConferenceStageProps> = ({
 
     const timer = setInterval(() => {
       setRestSecondsRemaining((prev) => {
+        if (prev === 11) {
+          // Announce 10-second warning
+          speechService.speakRestCountdown(10, currentSet + 1, activePersona as any);
+        }
         if (prev <= 1) {
           clearInterval(timer);
           setIsRestTimerActive(false);
           playTone(880, 250);
+          speechService.speakRestCountdown(0, currentSet + 1, activePersona as any);
           return 0;
         }
         return prev - 1;
@@ -523,18 +532,22 @@ export const VideoConferenceStage: React.FC<VideoConferenceStageProps> = ({
               if (fsmResult.repIncremented) {
                 playTone(660, 140); // Play audible rep completion chime
                 onRepCompleted();
+                const newRep = currentRep + 1;
+                speechService.speakRep(newRep, localTargetReps, activePersona as any);
                 setSessionHistoryScores((prev) => [...prev, evalResult.score]);
 
                 // Check set completion threshold
-                if (currentRep + 1 >= localTargetReps) {
+                if (newRep >= localTargetReps) {
                   if (currentSet < localTotalSets) {
                     // Set completed: trigger rest timer and set increment
                     playTone(880, 250);
+                    speechService.speakSetComplete(currentSet, localTotalSets, currentExercise.defaultRestSec || 45, activePersona as any);
                     triggerRestInterval(currentExercise.defaultRestSec || 45);
                     if (onSetCompleted) onSetCompleted();
                   } else {
                     // Entire workout completed!
                     playTone(990, 400);
+                    speechService.speak("Outstanding job! All sets completed for this exercise!", 'REP_SET', { force: true });
                     persistCompletedWorkoutSession();
                     setIsHighlightModalOpen(true);
                   }
@@ -1078,6 +1091,7 @@ export const VideoConferenceStage: React.FC<VideoConferenceStageProps> = ({
               tempoPhase={movementPhase === 'START' ? 'HOLD' : movementPhase === 'DESCENDING' ? 'ECCENTRIC' : movementPhase === 'BOTTOM' ? 'HOLD' : 'CONCENTRIC'}
               activePersona={activePersona}
               onPersonaChange={setActivePersona}
+              onOpenVoiceSettings={onOpenVoiceSettings}
             />
           </div>
         </div>

@@ -220,3 +220,23 @@ class UserProgressResponse(BaseModel):
     last_workout_date: Optional[datetime] = None
 
     model_config = ConfigDict(from_attributes=True)
+
+
+# AI Coach & Chat Schemas
+class CoachChatRequest(BaseModel):
+    message: str
+    persona: Optional[str] = "drill_sergeant"
+    exercise_name: Optional[str] = None
+    rep_count: Optional[int] = None
+    current_set: Optional[int] = None
+    target_reps: Optional[int] = None
+    form_status: Optional[str] = None
+    hazard_message: Optional[str] = None
+
+
+class CoachChatResponse(BaseModel):
+    reply: str
+    persona: str
+    source: str = "coach_engine"  # "gemini" or "coach_engine"
+    suggested_cues: Optional[List[str]] = []
+

@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
-import { Volume2, VolumeX, Shield, Flame, Activity, User, Sparkles, Cpu, Dumbbell, HeartPulse } from 'lucide-react';
+import { Volume2, VolumeX, Shield, Flame, Activity, User, Sparkles, Cpu, Dumbbell, HeartPulse, Sliders } from 'lucide-react';
 import { CoachPersona } from '../types';
+import { speechService } from '../services/speechService';
 
 interface CoachAvatarProps {
   cue: string;
@@ -11,9 +12,10 @@ interface CoachAvatarProps {
   tempoPhase: 'ECCENTRIC' | 'HOLD' | 'CONCENTRIC' | 'PAUSE';
   activePersona: CoachPersona;
   onPersonaChange: (persona: CoachPersona) => void;
+  onOpenVoiceSettings?: () => void;
 }
 
-const PERSONA_CONFIGS: Record<CoachPersona, {
+const PERSONA_CONFIGS: Record<string, {
   name: string;
   role: string;
   voicePitch: number;
@@ -30,6 +32,15 @@ const PERSONA_CONFIGS: Record<CoachPersona, {
     badgeBg: 'border-lime-400/40 text-lime-300 bg-lime-400/10',
     icon: Flame,
     greeting: 'DRIVE! NO SLACKING!'
+  },
+  encouraging: {
+    name: 'Elena Coach',
+    role: 'Encouraging Personal Trainer',
+    voicePitch: 1.05,
+    voiceRate: 1.0,
+    badgeBg: 'border-emerald-400/40 text-emerald-300 bg-emerald-400/10',
+    icon: Shield,
+    greeting: 'You have got this! Focus and triumph.'
   },
   clinical_pt: {
     name: 'Dr. Elena, DPT',
@@ -48,6 +59,15 @@ const PERSONA_CONFIGS: Record<CoachPersona, {
     badgeBg: 'border-emerald-400/40 text-emerald-300 bg-emerald-400/10',
     icon: Sparkles,
     greeting: 'Breathe with intention.'
+  },
+  calm: {
+    name: 'Kai Zen',
+    role: 'Calm & Mindful Coach',
+    voicePitch: 0.95,
+    voiceRate: 0.9,
+    badgeBg: 'border-emerald-400/40 text-emerald-300 bg-emerald-400/10',
+    icon: Sparkles,
+    greeting: 'Move with peaceful control.'
   },
   bio_hacker: {
     name: 'Apex-9000',
@@ -68,38 +88,32 @@ export const CoachAvatar: React.FC<CoachAvatarProps> = ({
   voiceCuesEnabled,
   tempoPhase,
   activePersona,
-  onPersonaChange
+  onPersonaChange,
+  onOpenVoiceSettings
 }) => {
   const [isSpeaking, setIsSpeaking] = useState(false);
   const currentPersona = PERSONA_CONFIGS[activePersona] || PERSONA_CONFIGS.drill_sergeant;
   const PersonaIcon = currentPersona.icon;
 
-  // Trigger speech synthesis when cue changes and voiceCuesEnabled is true
+  // Subscribe to speech service speaking state
+  useEffect(() => {
+    const unsub = speechService.subscribe((speaking) => {
+      setIsSpeaking(speaking);
+    });
+    return unsub;
+  }, []);
+
+  // Sync voice cues enabled state to speech service
+  useEffect(() => {
+    speechService.updateSettings({ enabled: voiceCuesEnabled, persona: activePersona as any });
+  }, [voiceCuesEnabled, activePersona]);
+
+  // Trigger throttled form correction through speech service
   useEffect(() => {
     if (!cue || !voiceCuesEnabled) return;
-
-    if ('speechSynthesis' in window) {
-      window.speechSynthesis.cancel(); // Stop prior speech
-      const utterance = new SpeechSynthesisUtterance(cue);
-      utterance.rate = currentPersona.voiceRate;
-      utterance.pitch = currentPersona.voicePitch;
-      utterance.onstart = () => setIsSpeaking(true);
-      utterance.onend = () => setIsSpeaking(false);
-      utterance.onerror = () => setIsSpeaking(false);
-      window.speechSynthesis.speak(utterance);
-    }
-  }, [cue, voiceCuesEnabled, activePersona, currentPersona]);
-
-  const getStatusColor = () => {
-    switch (formStatus) {
-      case 'PERFECT':
-        return 'from-lime-400 to-emerald-500 border-lime-400 text-lime-300';
-      case 'MINOR_CORRECTION':
-        return 'from-amber-400 to-orange-500 border-amber-400 text-amber-300';
-      case 'CRITICAL_RISK':
-        return 'from-rose-500 to-red-600 border-rose-400 text-rose-300';
-    }
-  };
+    const isCritical = formStatus === 'CRITICAL_RISK';
+    speechService.speakFormCorrection(cue, isCritical, activePersona as any);
+  }, [cue, voiceCuesEnabled, activePersona, formStatus]);
 
   return (
     <div className="bg-zinc-900/90 backdrop-blur border border-zinc-800 rounded-2xl p-4 text-zinc-100 shadow-2xl relative overflow-hidden">
@@ -121,7 +135,7 @@ export const CoachAvatar: React.FC<CoachAvatarProps> = ({
             </div>
 
             {isSpeaking && (
-              <div className="absolute -bottom-1 left-1/2 -translate-x-1/2 flex items-end space-x-0.5 px-1.5 py-0.5 bg-zinc-950 rounded-full border border-lime-400/50">
+              <div className="absolute -bottom-1 left-1/2 -translate-x-1/2 flex items-end space-x-0.5 px-1.5 py-0.5 bg-zinc-950 rounded-full border border-lime-400/50 shadow-md">
                 <div className="w-1 h-2 bg-lime-400 animate-pulse" />
                 <div className="w-1 h-3.5 bg-lime-300 animate-bounce" />
                 <div className="w-1 h-2 bg-lime-400 animate-pulse" />
@@ -142,31 +156,45 @@ export const CoachAvatar: React.FC<CoachAvatarProps> = ({
           </div>
         </div>
 
-        {/* Persona Selector Selector Tabs */}
-        <div className="flex items-center space-x-1 bg-zinc-950/80 p-1 rounded-xl border border-zinc-800 shrink-0">
-          {(['drill_sergeant', 'clinical_pt', 'zen_coach', 'bio_hacker'] as CoachPersona[]).map((p) => {
-            const config = PERSONA_CONFIGS[p];
-            const Icon = config.icon;
-            const isSelected = activePersona === p;
-            return (
-              <button
-                key={p}
-                onClick={() => onPersonaChange(p)}
-                title={config.role}
-                className={`p-1.5 rounded-lg text-xs font-mono font-bold transition-all flex items-center space-x-1 ${
-                  isSelected
-                    ? 'bg-lime-400 text-zinc-950 shadow-md shadow-lime-400/20'
-                    : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800'
-                }`}
-              >
-                <Icon className="w-3.5 h-3.5" />
-              </button>
-            );
-          })}
+        {/* Persona Selector Tabs & Voice Settings Button */}
+        <div className="flex items-center space-x-1.5 shrink-0">
+          <div className="flex items-center space-x-1 bg-zinc-950/80 p-1 rounded-xl border border-zinc-800">
+            {(['drill_sergeant', 'clinical_pt', 'zen_coach', 'bio_hacker'] as CoachPersona[]).map((p) => {
+              const config = PERSONA_CONFIGS[p] || PERSONA_CONFIGS.drill_sergeant;
+              const Icon = config.icon;
+              const isSelected = activePersona === p;
+              return (
+                <button
+                  key={p}
+                  type="button"
+                  onClick={() => onPersonaChange(p)}
+                  title={config.role}
+                  className={`p-1.5 rounded-lg text-xs font-mono font-bold transition-all flex items-center space-x-1 ${
+                    isSelected
+                      ? 'bg-lime-400 text-zinc-950 shadow-md shadow-lime-400/20'
+                      : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800'
+                  }`}
+                >
+                  <Icon className="w-3.5 h-3.5" />
+                </button>
+              );
+            })}
+          </div>
+
+          {onOpenVoiceSettings && (
+            <button
+              type="button"
+              onClick={onOpenVoiceSettings}
+              title="Configure Voice & Speech Settings"
+              className="p-2 bg-zinc-950 hover:bg-zinc-800 border border-zinc-800 hover:border-zinc-700 text-zinc-400 hover:text-lime-400 rounded-xl transition-all"
+            >
+              <Sliders className="w-4 h-4" />
+            </button>
+          )}
         </div>
       </div>
 
-      {/* Spoken Cue Box (<10 words requirement for movement) */}
+      {/* Spoken Cue Box */}
       <div className="p-3 rounded-xl bg-zinc-950/90 border border-zinc-800 flex items-start space-x-2.5 shadow-inner">
         <Volume2 className={`w-4 h-4 shrink-0 mt-0.5 ${isSpeaking ? 'text-lime-400 animate-pulse' : 'text-zinc-400'}`} />
         <div className="flex-1">
@@ -182,4 +210,3 @@ export const CoachAvatar: React.FC<CoachAvatarProps> = ({
     </div>
   );
 };
-

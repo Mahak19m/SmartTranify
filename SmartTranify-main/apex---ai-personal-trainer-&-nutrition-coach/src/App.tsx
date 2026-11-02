@@ -10,15 +10,19 @@ import { NutritionCoachView } from './components/NutritionCoachView';
 import { ProgressAnalyticsView } from './components/ProgressAnalyticsView';
 import { PainAlertModal } from './components/PainAlertModal';
 import { CoachChatWidget } from './components/CoachChatWidget';
+import { VoiceSettingsModal } from './components/VoiceSettingsModal';
 import { EXERCISES_DATABASE } from './data/exercisesData';
-import { UserIntake, Exercise, WorkoutPlan, PrimaryGoal, FitnessLevel } from './types';
+import { UserIntake, Exercise, WorkoutPlan, PrimaryGoal, FitnessLevel, CoachPersona } from './types';
 
 function AppContent() {
   const { user, profile, isAuthenticated } = useAuth();
   const [activeTab, setActiveTab] = useState<string>('stage');
   const [voiceCuesEnabled, setVoiceCuesEnabled] = useState<boolean>(true);
+  const [activeCoachPersona, setActiveCoachPersona] = useState<CoachPersona>('drill_sergeant');
+  const [isVoiceSettingsOpen, setIsVoiceSettingsOpen] = useState<boolean>(false);
   const [isPainModalOpen, setIsPainModalOpen] = useState<boolean>(false);
   const [isAuthModalOpen, setIsAuthModalOpen] = useState<boolean>(false);
+
 
   // User Intake Profile State synchronized with Auth Profile
   const [userIntake, setUserIntake] = useState<UserIntake>({
@@ -139,6 +143,7 @@ function AppContent() {
               setCurrentSet(1);
               setCurrentRep(0);
             }}
+            onOpenVoiceSettings={() => setIsVoiceSettingsOpen(true)}
           />
         )}
 
@@ -165,7 +170,20 @@ function AppContent() {
       </main>
 
       {/* Interactive AI Coach Chat Assistant */}
-      <CoachChatWidget />
+      <CoachChatWidget
+        persona={activeCoachPersona}
+        currentExercise={currentExercise.name}
+        currentRep={currentRep}
+        currentSet={currentSet}
+        targetReps={targetReps}
+      />
+
+      {/* AI Voice & Trainer Settings Modal */}
+      <VoiceSettingsModal
+        isOpen={isVoiceSettingsOpen}
+        onClose={() => setIsVoiceSettingsOpen(false)}
+        onPersonaChanged={(p) => setActiveCoachPersona(p)}
+      />
 
       {/* Authentication Modal */}
       <AuthModal
@@ -178,6 +196,7 @@ function AppContent() {
         isOpen={isPainModalOpen}
         onClose={() => setIsPainModalOpen(false)}
       />
+
 
       {/* Footer Branding & Disclaimer */}
       <footer className="bg-slate-900 border-t border-slate-800/80 py-4 px-4 text-center text-xs text-slate-500 space-y-1">

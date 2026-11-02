@@ -15,12 +15,14 @@ from schemas import (
     FitnessProfileCreate, FitnessProfileUpdate, FitnessProfileResponse,
     WorkoutCreate, WorkoutSessionCreate, WorkoutSessionResponse,
     MealCreate, MealRecordCreate, ProgressCreate, WeightHistoryCreate,
-    UserProgressResponse
+    UserProgressResponse, CoachChatRequest, CoachChatResponse
 )
 from auth import (
     verify_password, get_password_hash, create_access_token,
-    get_current_user, verify_token, security
+    get_current_user, get_optional_user, verify_token, security
 )
+from ai_coach import get_coach_response
+
 from fastapi.security import HTTPAuthorizationCredentials
 
 # Initialize database schema
@@ -508,3 +510,27 @@ def get_progress_summary(
         db.commit()
         db.refresh(prog)
     return prog
+
+
+# -------------------------------------------------------------
+# AI Fitness Trainer & Biomechanics Chat
+# -------------------------------------------------------------
+@app.post("/api/apex/chat", response_model=CoachChatResponse)
+@app.post("/api/chat", response_model=CoachChatResponse)
+def coach_chat(
+    chat_req: CoachChatRequest,
+    current_user: Optional[User] = Depends(get_optional_user),
+    db: Session = Depends(get_db)
+):
+    """
+    AI Coach interactive chat powered by Gemini API with fallback to domain-specific biomechanical coach engine.
+    Injects user profile, injuries, workout telemetry and persona context.
+    """
+    profile = None
+    progress = None
+    if current_user:
+        profile = db.query(FitnessProfile).filter(FitnessProfile.user_id == current_user.id).first()
+        progress = db.query(UserProgress).filter(UserProgress.user_id == current_user.id).first()
+
+    return get_coach_response(chat_req, profile=profile, current_progress=progress)
+
